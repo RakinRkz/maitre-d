@@ -1,0 +1,38 @@
+# Private kickoff brief for Claude Code; never commit
+KICKOFF.md
+
+# Secrets. .env.example is the committed template.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local Postgres data directory, if running portable binaries
+.pgdata/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# ElevenLabs CLI credentials, should one ever land in the tree
+auth-keyring.json
+
+# Claude Code per-user settings
+.claude/settings.local.json
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

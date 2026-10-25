@@ -1,0 +1,9 @@
+# Normalise line endings to LF in the repository. Development happens on
+# Windows and CI runs on Linux; without this, autocrlf settings differ per
+# machine and diffs fill with whitespace-only changes.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.mp3 binary
