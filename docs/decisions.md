@@ -437,6 +437,39 @@ operation. A validation error quotes the value it rejected, which here can be a 
 `Content-Length` pre-check that the streaming cap made redundant, which was deleted, and a logging
 test whose fixture the validation error truncated away); both were fixed and re-run.
 
+## 24. The dashboard and session routes are local-only
+
+**Decision.** `require_local_request` refuses a request that carries a proxy header
+(`Cf-Connecting-Ip`, `Cf-Ray`, `X-Forwarded-For`, `Forwarded`, `X-Real-Ip`) or whose peer is not
+loopback. It is a dependency on `/api/session` and the dashboard router. It is not on the tools, the
+webhook or `/api/health`.
+
+**Alternatives.**
+- Leave them open and rely on the tunnel hostname being hard to guess.
+- A bearer or password on the dashboard.
+- Bind uvicorn to `127.0.0.1`, which looks like the fix and isn't: `cloudflared` runs on this
+  machine and connects to it locally, so the tunnel reaches a loopback-only server too.
+
+**Why.** ElevenLabs can only reach the tools through a public hostname, and that hostname reaches
+the whole app. The dashboard lists guests' names and phone numbers, and `/api/session` starts calls
+that spend the month's voice minutes; neither has a login. An unguessable URL is not authentication.
+The tool bearer is a secret held by ElevenLabs, which a browser can't keep. Tunnel traffic is the
+one kind that is marked, so refusing marked requests closes the hole without a password. A
+deployment, which would sit behind a proxy, replaces this with a password (plan §9). Header-based
+checks fit a tunnel we control and are not a general-purpose answer.
+
+**Update, 2026-10-30, from a security review.** The first version trusted only the TCP peer and
+the absence of proxy headers. That doesn't cover the operator's own browser: a web page they
+are looking at can reach `127.0.0.1:8000` by rebinding its own DNS name there, and the request
+then comes from loopback with no proxy headers, so it passed. The guard now also requires a
+`Host` of `localhost`, `127.0.0.1` or `[::1]` (matched exactly after removing the port, so
+`localhost.evil.example` and `localhost@evil.example` fail) and refuses a request the browser
+labels `Sec-Fetch-Site: cross-site` or `same-site`. The reviewer rated this Medium at
+confidence 7; an independent second look rated it a false positive at 4, because the data is
+fictional, the voice-minute impact is resource exhaustion, and a blind cross-site POST only
+mints a token nobody can read. It was done anyway as plain hardening: it is a few lines, it
+is what Vite does for its own dev server, and the guard was documented as local-only.
+
 ## 25. The prompt is written as Markdown and embedded in the agent config
 
 **Decision.** The prompt lives in `agent/prompts/saffron_table.md`. `scripts/sync_agent_prompt.py`

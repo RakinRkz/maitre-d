@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from maitre_d.config import Settings, get_settings
 from maitre_d.db import make_engine, make_sessionmaker
 from maitre_d.invocations import TOOLS_PREFIX, ToolInvocationLog
-from maitre_d.routes import tools, webhooks
+from maitre_d.routes import dashboard, session, tools, webhooks
 
 
 async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -52,5 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(tools.router)
     app.include_router(webhooks.router)
+    app.include_router(session.router)
+    app.include_router(dashboard.router)
 
     return app

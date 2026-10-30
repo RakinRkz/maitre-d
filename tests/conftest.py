@@ -105,7 +105,7 @@ async def app(database_url: str, clean_db: None, now: datetime) -> AsyncIterator
 async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
     async with AsyncClient(
         transport=ASGITransport(app=app),
-        base_url="http://test",
+        base_url="http://localhost",
         headers={"Authorization": f"Bearer {TOOL_SECRET}"},
     ) as client:
         yield client

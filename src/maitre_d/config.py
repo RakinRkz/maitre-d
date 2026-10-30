@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     elevenlabs_api_key: SecretStr | None = None
     elevenlabs_webhook_secret: SecretStr | None = None
     elevenlabs_agent_id: str | None = None
+    # Which ElevenLabs environment a web session resolves `backend_host` in. Unset means the
+    # platform's own default, production, which is the only environment until something is deployed.
+    elevenlabs_environment: str | None = None
     log_level: str = "INFO"
 
 

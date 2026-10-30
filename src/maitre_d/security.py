@@ -112,3 +112,51 @@ def verify_webhook_signature(
     # Checked after the signature, so only a genuine request can learn anything from the window.
     if abs(int(now.timestamp()) - int(timestamp)) > WEBHOOK_TOLERANCE.total_seconds():
         raise WebhookSignatureError("timestamp outside the tolerance window")
+
+
+# Headers that a tunnel or reverse proxy adds when it forwards a request. cloudflared sets the
+# Cf-* ones on everything it relays, and the sender cannot remove them.
+_FORWARDED_HEADERS = ("cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded", "x-real-ip")
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+# What a browser on this machine puts in the Host header. A page on another site that has tricked
+# the browser into resolving its own name to 127.0.0.1 (DNS rebinding) sends its own name instead.
+_LOCAL_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "[::1]"})
+# A browser labels every request with where it came from. Same-origin (the dashboard calling its
+# own backend, directly or through the Vite proxy) and "none" (typing the URL) are ours.
+_OWN_FETCH_SITES = frozenset({"same-origin", "none"})
+
+
+def _hostname(host_header: str | None) -> str:
+    """The Host header without its port, lower-cased. Empty if there is none."""
+    host = (host_header or "").strip().lower()
+    if host.startswith("["):
+        return host.partition("]")[0] + "]"
+    return host.partition(":")[0]
+
+
+def require_local_request(request: Request) -> None:
+    """Refuse a request that did not come straight from the operator on this machine.
+
+    The tools and the webhook have to be reachable from ElevenLabs, so the local tunnel exposes the
+    whole app on a public hostname. The dashboard routes show guests' names and numbers and
+    `/api/session` starts calls that spend the month's voice minutes; neither has a login. A
+    hostname that is hard to guess is not authentication, so they are refused when the request:
+
+    - arrived through a proxy or tunnel (the headers they add), or from another host;
+    - names a host other than localhost in `Host`, which is how a web page the operator is looking
+      at can reach this server by rebinding its own DNS name to 127.0.0.1;
+    - is labelled by the browser as coming from another site, which stops a page from making the
+      server mint a session token blind.
+
+    A deployment would replace this with a password (plan §9); it would also sit behind a proxy.
+    """
+    client = request.client
+    refused = (
+        client is None
+        or client.host not in _LOOPBACK_HOSTS
+        or any(name in request.headers for name in _FORWARDED_HEADERS)
+        or _hostname(request.headers.get("host")) not in _LOCAL_HOSTNAMES
+        or request.headers.get("sec-fetch-site", "none") not in _OWN_FETCH_SITES
+    )
+    if refused:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only available from this machine")
