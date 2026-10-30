@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 NAME = "Saffron Table"
 TIMEZONE = ZoneInfo("Europe/London")
+# Fictional, and deliberately without a postcode so it can't point at a real building.
+ADDRESS = "12 Cardamom Lane, Shoreditch, London"
 
 
 @dataclass(frozen=True)
