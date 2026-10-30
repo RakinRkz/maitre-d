@@ -541,3 +541,33 @@ that finds objects by name and updates them can be run again after any edit, whi
 prompt reaches the platform. It is covered by tests against a stateful fake platform, because the
 property that matters is that a second run creates nothing. The CLI remains useful for
 `agents pull` and for running agent tests.
+
+## 28. Frontend choices: one page, a pure timeline function, generated types
+
+**Decision.** The dashboard is one page with no router, server state only through TanStack Query,
+and API types generated from the backend's OpenAPI document (`scripts/export_openapi.py`, then
+`openapi-typescript`), with a CI gate that fails when either committed copy is stale. The only
+logic worth a unit test is `buildTimeline`, which merges the stored transcript with our own
+`tool_invocations`: results are found by `request_id` across the whole transcript, calls are paired
+with server records by position **within each tool name**, and a call the platform never made does
+not use a record up. There are no component tests. TypeScript is 5.9.3, not the newest, because
+typescript-eslint and openapi-typescript each cap it below 6.1 and 5.x respectively.
+
+**Alternatives.**
+- Pair by position in the whole call. Rejected: `end_call` is run by the platform and never
+  reaches our server, so a global index shifts every pairing after it.
+- Match tool results by position. Rejected: a result often arrives in a later turn.
+- Hand-written TypeScript interfaces, or component tests for every panel.
+
+**Why.** Pairing by tool name is the smallest rule that survives the two facts above. The function
+is pure and never throws on a transcript, because the transcript is stored exactly as the platform
+sent it and nothing in it is trusted. It was developed with 19 deliberate breaks, each of which
+failed a test, and one real bug (an empty `request_id` matched any result without one) was found
+by a test before the breaks. The timings it shows are two measurements of the same call: the
+platform's round trip and our server's time; the gap is network and platform overhead, which
+nothing else in the system can see. Seeded demo calls carry no timings at all, so a screenshot can't
+show a latency that was not measured.
+
+**Not exercised.** The "Talk" button is typechecked and linted only: it needs a live call, which
+spends voice minutes. The metric names in a turn's `conversation_turn_metrics`, and whether
+`elapsed_time` is in seconds, are unverified until a real payload arrives.

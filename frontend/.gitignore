@@ -1,0 +1,4 @@
+# Root .gitignore already covers node_modules and dist; this keeps the folder self-describing.
+node_modules/
+dist/
+*.tsbuildinfo
