@@ -110,6 +110,34 @@ class ToolInvocation(Base):
     )
 
 
+class Call(Base):
+    """One finished conversation, stored from the post-call webhook.
+
+    The transcript is kept exactly as the platform sent it: it is only ever read whole, to draw
+    one call, so normalising it into turns would buy nothing (decisions #15).
+    """
+
+    __tablename__ = "calls"
+
+    conversation_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    agent_id: Mapped[str] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_secs: Mapped[int | None]
+    # success | failure | unknown, as the platform's analysis reports it. Not constrained: a new
+    # value from the platform must not turn a delivered webhook into a 500 that gets retried.
+    call_successful: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text)
+    transcript: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # `metadata` is reserved on declarative classes, so the attribute has another name.
+    call_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (Index("calls_started_at_idx", "started_at"),)
+
+
 class CallerMessage(Base):
     __tablename__ = "caller_messages"
 

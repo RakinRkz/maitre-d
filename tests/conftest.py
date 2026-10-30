@@ -76,7 +76,7 @@ async def engine(database_url: str) -> AsyncIterator[AsyncEngine]:
 async def clean_db(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.execute(
-            text("TRUNCATE bookings, tool_invocations, caller_messages RESTART IDENTITY")
+            text("TRUNCATE bookings, tool_invocations, caller_messages, calls RESTART IDENTITY")
         )
 
 

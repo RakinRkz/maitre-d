@@ -391,3 +391,31 @@ act on "date must be YYYY-MM-DD"; the model needs the exact field and format to 
 and gains nothing from conversational padding. Splitting them lets each be written and tested for
 its own reader, and keeps schema vocabulary out of the voice. It also leaves room to add model
 guidance later without risking it being read aloud.
+
+## 23. The webhook is read with a cap, verified, and only then parsed
+
+**Decision.** `POST /webhooks/elevenlabs` streams the raw body with a 2 MB cap, verifies the
+`ElevenLabs-Signature` over those exact bytes, and only then parses JSON. Every verification failure
+returns the same `401`, whatever the reason; the reason goes to the log. A missing or blank secret is
+a `500` before the body is read. After a valid signature: an unknown event type is a `200` and is
+ignored, a body that is not JSON is a `400`, and a `post_call_transcription` missing its ID, agent
+or transcript is a `422`. A good event is an upsert on `conversation_id` that leaves `received_at`
+at the first delivery. A rejected payload is logged by field path, never by value.
+
+**Alternatives.**
+- The SDK's `construct_event` (see #6; re-read at `elevenlabs` 2.75.0 on 2026-10-30, and it still
+  compares with `!=` and checks only the past side of the timestamp).
+- A `200` for anything unreadable, so the platform never retries.
+- Insert-only with `ON CONFLICT DO NOTHING`.
+
+**Why.** The signature covers bytes, so parsing first and re-serialising would fail genuine
+requests, and parsing before verifying would run a parser on a stranger's input. The cap bounds what
+a stranger can make us buffer, which has to happen before authentication because the signature can't
+be checked without the whole body. Once the sender is proven to be ElevenLabs, an unreadable body
+means the platform changed its payload. A quiet `200` would hide that; a `4xx` shows up in the
+webhook's delivery history. An upsert makes a retry and a redelivery with refined analysis the same
+operation. A validation error quotes the value it rejected, which here can be a caller's words.
+
+**Pinned by.** `tests/test_webhooks.py`. A mutation run against it found two weak tests (a
+`Content-Length` pre-check that the streaming cap made redundant, which was deleted, and a logging
+test whose fixture the validation error truncated away); both were fixed and re-run.
