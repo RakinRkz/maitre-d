@@ -177,6 +177,16 @@ override. asyncpg works with the default loop, and its errors still carry `sqlst
 keeps the dependency list short. It also lets tests swap in `httpx.MockTransport` without patching
 SDK internals. If the scripts grow to use many endpoints, the SDK becomes worth it.
 
+**Update, 2026-10-30.** CLI 1.8.0 now has commands for knowledge-base documents, environment
+variables, secrets and webhooks, which plan §2 said it could not do. The scripts stay on httpx
+because they do more than one call: `upload_kb.py` compares content before creating a document and
+writes the IDs into the agent config, and `set_backend_host.py` validates the host first. All
+outbound calls are in `src/maitre_d/elevenlabs.py`, tested with `httpx.MockTransport`. One
+assumption, now checked: the reuse check compares the uploaded text with what the content
+endpoint returns, and the platform might have normalised it, so that every run created a copy. It
+doesn't: the second real run printed "reused" (see the update under #26). `upload_kb.py` has since
+been folded into `setup_elevenlabs.py` (#27).
+
 ## 12. Tool URLs come from ElevenLabs environment variables
 
 **Decision.** The committed tool configs use `https://{{system__env_backend_host}}/tools/...`. The
@@ -191,6 +201,13 @@ SDK internals. If the scripts grow to use many endpoints, the SDK becomes worth 
 **Why.** The agent config stays a reviewable file that doesn't churn with every dev session, and
 one agent serves both environments. ngrok is the fallback if environment variables prove awkward
 in M2.
+
+**Update, 2026-10-30.** The account has one environment, `production`, and nothing is deployed, so
+there is no second host to point it at. `scripts/set_backend_host.py` therefore defaults to
+`production`, which is also what a web session uses, and `ELEVENLABS_ENVIRONMENT` can name another.
+`--environment development` is for when a deployment exists. Whether a tool URL can read
+`{{system__env_backend_host}}` is still unverified: the platform's OpenAPI document doesn't mention
+it, and the docs the plan was written from do.
 
 ## 13. One deployable: FastAPI serves the built dashboard
 
@@ -468,3 +485,26 @@ default and its time to first byte is reported from the calls made anyway.
   returns matched: the platform returns the text as uploaded, so the reuse check in
   `ensure_text_document_outcome` works (second run: "reused"). That settles the doubt recorded in
   decisions #11.
+
+## 27. The workspace is provisioned by one idempotent script, not by hand-run CLI commands
+
+**Decision.** `scripts/setup_elevenlabs.py` creates or updates, by name, the secret and its
+variable, the placeholder `backend_host`, the two knowledge-base documents, the six tools and the
+agent, from the files in `agent/` and `knowledge/`. Tool and document IDs are put into the request
+at run time and not written to the repo; the committed agent config keeps both lists empty. Only
+the agent's own ID is written, to `.env`. `scripts/create_webhook.py` replaces the post-call webhook
+and writes its signing secret straight into `.env`. `--skip-secret` leaves the secret to the user.
+
+**Alternatives.**
+- The CLI's `agents add`, `tools add` and `agents push`, with the IDs they print copied by hand
+  into the config.
+- Committing the IDs of one workspace.
+
+**Why.** The CLI path writes registry files in a format it doesn't document and only after a
+successful remote call, and during this work `agents add --dry-run` still tried to create the agent.
+It also leaves a stranger with their own key to copy six tool IDs into a config by hand, which fails
+the project's bar that someone else can run it. Committed IDs belong to one account. A script
+that finds objects by name and updates them can be run again after any edit, which is how a changed
+prompt reaches the platform. It is covered by tests against a stateful fake platform, because the
+property that matters is that a second run creates nothing. The CLI remains useful for
+`agents pull` and for running agent tests.
