@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      # The booking guarantees live in Postgres (an exclusion constraint and advisory locks), so the
+      # tests run against the real thing. The official image ships btree_gist.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: maitre_d
+          POSTGRES_PASSWORD: maitre_d
+          POSTGRES_DB: maitre_d_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U maitre_d"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://maitre_d:maitre_d@localhost:5432/maitre_d_test
+      TEST_DATABASE_URL: postgresql+asyncpg://maitre_d:maitre_d@localhost:5432/maitre_d_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # --locked: fail if uv.lock does not match pyproject.toml, instead of quietly updating it.
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      # The models and the migrations must describe the same schema.
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+      # Generated files: each of these fails if the committed copy is stale.
+      - run: uv run python scripts/generate_knowledge.py --check
+      - run: uv run python scripts/sync_agent_prompt.py --check
+      - run: uv run python scripts/export_openapi.py --check
+      - run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      # The types are generated from the backend's OpenAPI document. Regenerating must change
+      # nothing; otherwise the committed types have drifted from what the API really returns.
+      - run: npm run generate:types
+      - run: git diff --exit-code -- src/lib/api-schema.ts
