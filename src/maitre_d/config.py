@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     # Which ElevenLabs environment a web session resolves `backend_host` in. Unset means the
     # platform's own default, production, which is the only environment until something is deployed.
     elevenlabs_environment: str | None = None
+    # Where the built dashboard is. Unset means `frontend/dist`, which is served only if it exists.
+    frontend_dist: str | None = None
     log_level: str = "INFO"
 
 

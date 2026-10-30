@@ -7,16 +7,20 @@ importing this module must not need the environment; settings are read when the 
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from maitre_d.config import Settings, get_settings
 from maitre_d.db import make_engine, make_sessionmaker
 from maitre_d.invocations import TOOLS_PREFIX, ToolInvocationLog
 from maitre_d.routes import dashboard, session, tools, webhooks
+
+DEFAULT_FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 
 async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -41,7 +45,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await engine.dispose()
 
-    app = FastAPI(title="Maître D", lifespan=lifespan)
+    # No interactive docs and no served schema: the tunnel publishes the whole app, and the shape of
+    # the API is for the frontend's type generation (scripts/export_openapi.py), not for visitors.
+    app = FastAPI(
+        title="Maître D", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
+    )
     app.state.settings = settings
     app.add_middleware(ToolInvocationLog)
     app.add_exception_handler(RequestValidationError, _validation_error)  # type: ignore[arg-type]
@@ -54,5 +62,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(webhooks.router)
     app.include_router(session.router)
     app.include_router(dashboard.router)
+
+    # Last, so that every route above wins. Static files carry no data: the dashboard's numbers
+    # come from /api, which refuses anything that did not arrive from this machine.
+    dist = Path(settings.frontend_dist) if settings.frontend_dist else DEFAULT_FRONTEND_DIST
+    if dist.is_dir():
+        app.mount("/", StaticFiles(directory=dist, html=True), name="dashboard")
 
     return app
