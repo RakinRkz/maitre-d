@@ -1,0 +1,20 @@
+# For anyone with Docker. CI uses a Postgres service container instead.
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: maitre_d
+      POSTGRES_PASSWORD: maitre_d
+      POSTGRES_DB: maitre_d
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maitre_d -d maitre_d"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
