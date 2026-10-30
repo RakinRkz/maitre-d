@@ -409,6 +409,11 @@ and gains nothing from conversational padding. Splitting them lets each be writt
 its own reader, and keeps schema vocabulary out of the voice. It also leaves room to add model
 guidance later without risking it being read aloud.
 
+---
+
+*Decisions 23–28 came out of building M2's backend, agent config and dashboard. Nothing here has
+run against the live platform yet.*
+
 ## 23. The webhook is read with a cap, verified, and only then parsed
 
 **Decision.** `POST /webhooks/elevenlabs` streams the raw body with a 2 MB cap, verifies the

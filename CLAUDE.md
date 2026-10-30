@@ -9,33 +9,50 @@ bookings, calls and a per-call timeline, and can start a web voice call.
 `docs/decisions.md` records why things are the way they are. Read both before changing anything
 structural.
 
-> **Status: M1 built, reviewed and fixed** (booking domain, server-tool endpoints, tests), committed
-> in two parts. Not built yet: the agent config, `/api/session`, the post-call webhook,
-> the dashboard, CI. Lines below marked *(later)* describe those. Update this file when a milestone
-> changes what is true.
+> **Status: built, tested and committed (not pushed); not yet exercised live.** Everything in
+> the plan except the public deployment exists: the booking domain and server tools, the post-call
+> webhook, `/api/session`, the dashboard (read API and React frontend), the agent as code, the
+> knowledge base, CI, and agent evals. The platform side has only been partly set up: the agent,
+> its tools, the secret and the webhook do not exist on the ElevenLabs account yet, because the
+> steps that publish this machine (a tunnel) or write a secret to the workspace need the owner's
+> say-so (`docs/wip.md`). No real call has been made, so no end-to-end latency has been measured.
+> Update this file when that changes.
 
 ## Layout
 
 ```
 src/maitre_d/
-  main.py            create_app() factory: middleware, routers, validation-error handling
+  main.py            create_app() factory: middleware, routers, static dashboard, error handling
   config.py          settings from the environment and .env
   db.py              engine and session helpers; sync_dining_tables()
-  models.py          SQLAlchemy tables, mirroring the migration; constraint-name constants
+  models.py          SQLAlchemy tables, mirroring the migrations; constraint-name constants
   restaurant.py      the restaurant's facts; the only definition of hours, tables, timezone
   timeslots.py       local wall-clock time to UTC, DST-safe validation, slot grid
   bookings.py        availability, alternatives, and each booking tool's logic
   speech.py          caller-facing sentences; model guidance lives in routes/tools.py
   schemas.py         tool request/response models: the contract with the agent
-  security.py        tool bearer auth (post-call webhook HMAC comes in M3)
-  invocations.py     ASGI middleware that times every /tools/* request and logs it to the DB
+  dashboard_schemas.py  response models for the dashboard's read API
+  security.py        tool bearer, webhook HMAC verification, and the local-only guard
+  invocations.py     ASGI middleware: times /tools/* requests, caps bodies, logs answered ones
+  elevenlabs.py      every outbound call to the ElevenLabs REST API (httpx, no SDK)
+  envfile.py         sets one key in .env without touching the rest
+  knowledge.py       renders knowledge/restaurant.md from restaurant.py
   routes/tools.py    the server tools, one POST per tool, path = tool name
-migrations/          Alembic; 0001 is hand-written, `alembic check` confirms the models agree
-tests/               pytest against real Postgres; helpers.py holds shared builders,
-                     test_config.py for settings/auth, test_db.py for dining-table sync
-scripts/             create_databases.py, seed.py, bench_tools.py
-docs/                plan.md, decisions.md
-agent/, knowledge/, frontend/   (later)
+  routes/webhooks.py the post-call webhook: raw body, verify, then parse and upsert `calls`
+  routes/session.py  POST /api/session: a conversation token for the browser, never the key
+  routes/dashboard.py  GET /api/bookings, /calls, /messages, /metrics/tool-latency
+migrations/          Alembic; hand-written, `alembic check` confirms the models agree
+tests/               pytest, mostly against real Postgres; helpers.py holds shared builders
+scripts/             setup_elevenlabs.py, create_webhook.py, set_backend_host.py, run_agent_tests.py
+                     (the ElevenLabs side); seed.py, create_databases.py, bench_tools.py (local);
+                     generate_knowledge.py, sync_agent_prompt.py, export_openapi.py (generated files)
+agent/               the ElevenLabs agent as code: prompts/ (Markdown source of the prompt),
+                     agent_configs/, tool_configs/ (one JSON per server tool), test_configs/
+knowledge/           menu.md (hand-written) and restaurant.md (generated, never edited)
+frontend/            Vite + React + TypeScript dashboard; openapi.json and src/lib/api-schema.ts
+                     are generated from the backend's models
+docs/                plan.md (design), decisions.md (why), wip.md (state and open items)
+.github/workflows/   ci.yml
 ```
 
 ## Commands
@@ -44,7 +61,7 @@ agent/, knowledge/, frontend/   (later)
 uv sync                                   # install backend + dev dependencies
 uv run alembic upgrade head               # apply migrations to DATABASE_URL
 uv run alembic check                      # fails if models.py and the migrations disagree
-uv run python scripts/seed.py --demo      # tables plus a week of fictional bookings
+uv run python scripts/seed.py --demo      # tables, a week of bookings, two fictional calls
 uv run uvicorn maitre_d.main:create_app --factory --reload --port 8000
 
 uv run python scripts/create_databases.py # create both databases; safe to re-run
@@ -52,30 +69,46 @@ uv run pytest                             # rebuilds TEST_DATABASE_URL from the 
 uv run ruff check . && uv run ruff format --check . && uv run mypy
 uv run python scripts/bench_tools.py      # p50/p95 per tool against a running server
 
+# Generated files: each has a --check that CI runs, and a test or gate that fails when stale
+uv run python scripts/generate_knowledge.py     # knowledge/restaurant.md, from restaurant.py
+uv run python scripts/sync_agent_prompt.py      # agent/prompts/*.md into the agent config
+uv run python scripts/export_openapi.py         # frontend/openapi.json, from the Pydantic models
+
+cd frontend && npm run dev                # :5173, proxies /api to :8000
+cd frontend && npm run generate:types     # after export_openapi.py: src/lib/api-schema.ts
+cd frontend && npm run typecheck && npm run lint && npm test && npm run build
+
 # Local Postgres on the Windows dev machine: portable binaries, data in .pgdata/ (git-ignored)
 PG="$LOCALAPPDATA/Programs/postgresql-17/bin"
 "$PG/pg_ctl.exe" -D .pgdata -l .pgdata/server.log start      # and `stop`
 # Anywhere with Docker instead: docker compose up -d, then create_databases.py on a fresh volume
 
-# (later)
-cd frontend && npm run dev                # :5173, proxies /api to :8000
-cd frontend && npm run generate:types     # after changing any backend response model
-cd frontend && npm run lint && npm test && npm run build
-
-# Expose the local backend to ElevenLabs (cloudflared is not on PATH on the dev machine)
+# The ElevenLabs workspace. Safe to re-run: every object is found by name and updated.
+uv run python scripts/setup_elevenlabs.py --dry-run   # the plan; no network
+uv run python scripts/setup_elevenlabs.py             # secret, variables, docs, tools, tests, agent
+# Expose the local backend (cloudflared is not on PATH on the dev machine), then point the
+# platform at it. A quick tunnel gets a new hostname every start, so repeat both each time.
 "$LOCALAPPDATA/Programs/cloudflared/cloudflared.exe" tunnel --url http://localhost:8000
 uv run python scripts/set_backend_host.py <hostname>.trycloudflare.com
-
-# Agent config (the CLI runs through npx; there is no global install)
-npx @elevenlabs/cli agents push --dry-run    # always look before pushing
-npx @elevenlabs/cli agents push
-npx @elevenlabs/cli agents test <agent_id>   # costs credits; never in a loop
+uv run python scripts/create_webhook.py <hostname>.trycloudflare.com   # then restart the backend
+uv run python scripts/run_agent_tests.py                # lists the tests; runs nothing
+uv run python scripts/run_agent_tests.py book_next_friday --confirm-spend   # costs credits
 ```
 
 **The ElevenLabs account is on the Free plan:** 15 voice minutes a month and no overage. Never
-start a voice call or an agent-test run without first saying what it will spend. Pushing configs
-and creating tools, agents and knowledge-base documents cost nothing. The budget is in
-`docs/plan.md` section 14.
+start a voice call or an agent-test run without first saying what it will spend. Creating tools,
+agents and knowledge-base documents costs nothing. The budget is in `docs/plan.md` section 14.
+`run_agent_tests.py` refuses to run without `--confirm-spend`; the cost of a test run is not
+documented by the platform, so run one test, read the `credits_used` it reports, and decide then.
+
+**The workspace is provisioned by `scripts/setup_elevenlabs.py`, not by hand-run CLI commands**
+(decisions #27). The CLI is for reading and for `agents pull`. `--dry-run` is not a promise there:
+on 2026-10-30 `agents add --dry-run` still tried to create the agent, so when trying a CLI command
+for the first time add `--base-url http://127.0.0.1:9` so a request that should not be sent has
+nowhere to go. Reading is safe (`agents list`, `webhooks list`, `environment-variables list`).
+Anything that creates, updates or deletes changes the user's account even when it costs nothing,
+and starting a tunnel or writing a secret to the workspace needs their explicit OK: the
+environment itself refused both during M2 until they are allowed.
 
 ## Invariants
 
@@ -112,23 +145,43 @@ nothing.
 bound to `system__conversation_id` in the tool config. Don't add a tool parameter the LLM fills for
 anything that authorises or deduplicates.
 
-**Verify the webhook before parsing it** *(M3)*. HMAC over the raw body bytes, constant-time
-compare, timestamp within ±30 minutes, all before `json.loads`.
+**Verify the webhook before parsing it.** HMAC over the raw body bytes, constant-time compare,
+timestamp within ±30 minutes on both sides, all before the body is parsed. The body is read with a
+size cap first, because it has to be read before anyone is authenticated (decisions #23).
+
+**Routes with no login are local-only.** The tunnel that lets ElevenLabs reach the tools publishes
+the whole app, so `/api/session` and the dashboard routes refuse a request that came through a
+proxy, from another host, with a `Host` other than localhost (DNS rebinding), or labelled
+cross-site by the browser (`require_local_request`, decisions #24). A new route that shows
+guests' details or spends voice minutes gets this dependency. The tools and the webhook must not:
+they are protected by their own secrets, and ElevenLabs reaches them through the tunnel.
 
 **Anything a caller said is logged at DEBUG.** This covers names, phone numbers, messages and
 transcripts. INFO and above carry the tool name, outcome and timing only.
 
 **Restaurant facts have one definition.** Hours, tables and the timezone live in `restaurant.py`.
-`dining_tables` is synced from it by `sync_dining_tables()`; `knowledge/restaurant.md` will be
-generated from it *(M2)*, with a test that fails if the committed copy is stale.
+`dining_tables` is synced from it by `sync_dining_tables()`; `knowledge/restaurant.md` is
+generated from it by `scripts/generate_knowledge.py`, and a test fails if the committed copy is
+stale. The agent's prompt must not repeat hours or the address; a test checks that too.
 
 **Tool timing is measured by middleware, and the log write happens after the response.** Don't
 move the `tool_invocations` insert before the final `send`: it would add a database round trip
-to every pause the caller hears.
+to every pause the caller hears. Only requests the app answered (200) or failed on (5xx) are
+stored; refusals (401, 404, 405, 413) are a log line only, because anyone who finds the tunnel
+hostname can produce them. Bodies over 64 KB are refused before the app reads them. The engine is
+created with `hide_parameters=True` so a failed write can't put a guest's details in an error log
+(decisions #19, reproduced before it was fixed).
 
-**The agent config is code** *(M2)*. Change `agent/` files and push with the CLI. If something was changed
-in the ElevenLabs dashboard, `npx @elevenlabs/cli agents pull` before editing, or the next push overwrites
-it.
+**Nothing the platform sends us is stored without thought for what it contains.** The webhook
+removes each tool call's request headers before storing a transcript, because they can carry the
+bearer token. Treat any new field from the platform the same way before it reaches `calls`.
+
+**The agent config is code.** Change `agent/` files and push with the CLI. If something was changed
+in the ElevenLabs dashboard, `npx @elevenlabs/cli agents pull` before editing, or the next push
+overwrites it. The prompt is edited as Markdown in `agent/prompts/` and embedded in the config by
+`scripts/sync_agent_prompt.py`; never edit the `prompt` string in the JSON, and a test fails if
+the two differ. `tests/test_agent_config.py` also keeps each tool config in step with its request
+model, so change both together.
 
 ## Conventions
 

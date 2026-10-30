@@ -5,10 +5,16 @@ runs on the ElevenLabs Agents Platform. A FastAPI backend owns the booking domai
 the agent as server tools. Postgres stores bookings and calls. A React dashboard shows today's
 bookings, the call log, and a per-call timeline, and can start a web voice call with the agent.
 
-Status: **M1 done; replanned for the Free plan on 2026-10-27** (section 14). The booking domain
-and the server-tool endpoints are built and tested; the agent, webhook and dashboard are not. Where building M1 changed the design, `docs/decisions.md`
-(#16–#20) says what and why. Section 2 separates what was verified against the ElevenLabs docs on
-2026-10-25 from what still has to be checked against the live platform in M2.
+Status: **everything in the plan is built and tested except the public deployment, and none of it
+has been exercised by a live call** (section 14), replanned for the Free plan on 2026-10-27. Built:
+the booking domain, the server tools, the agent as code, the knowledge base, the post-call
+webhook, `/api/session`, the dashboard (read API and React frontend), CI and the agent evals.
+Setting up the platform side stopped part-way: the knowledge-base documents and a placeholder
+`backend_host` variable exist on the account, but the secret, the tools, the agent and the webhook
+do not, because the environment refused to publish this machine through a tunnel or write a secret
+to the workspace without the owner's say-so. So most platform assumptions in section 2 are still
+unchecked, apart from the three recorded in decisions #26. Where building changed the design,
+`docs/decisions.md` (#16–#28) says what and why.
 
 ---
 
@@ -42,7 +48,7 @@ SMS/email confirmations, combining tables for large parties.
 
 | Need | What the platform offers | Source |
 |---|---|---|
-| Agent as code | `@elevenlabs/cli` 1.7.1, binary `elevenlabs`. Layout `agents.json`, `tools.json`, `tests.json`, `agent_configs/`, `tool_configs/`, `test_configs/`. `agents push/pull/status`, `tools push/pull`, `tests push/pull`, `agents test <id>` (exits non-zero on failure). Configs are raw API JSON. **It cannot upload knowledge-base documents** or manage environment variables. | [CLI docs](https://elevenlabs.io/docs/eleven-agents/operate/cli), [repo](https://github.com/elevenlabs/cli) |
+| Agent as code | `@elevenlabs/cli` **1.8.0** (re-checked 2026-10-30; was 1.7.1), binary `elevenlabs`. Layout `agents.json`, `tools.json`, `tests.json`, `agent_configs/`, `tool_configs/`, `test_configs/`. `agents init/add/push/pull/status`, `tools add/push/pull`, `tests add/push/pull`, `agents test <id>` (exits non-zero on failure). Configs are raw API JSON. **As of 1.8.0 it also covers** knowledge-base documents (`agents knowledge-base documents …`), workspace secrets (`agents secrets`), `environment-variables`, `environments` and `webhooks`; the 2026-10-25 note that it could not upload documents or manage environment variables is out of date. The format of the registry entries is not documented and is learnt by running `add`. `--dry-run` is not honoured by `agents add`. | [CLI docs](https://elevenlabs.io/docs/eleven-agents/operate/cli), [repo](https://github.com/elevenlabs/cli) |
 | Server tools | Standalone tools (`POST /v1/convai/tools`) referenced from the agent by `conversation_config.agent.prompt.tool_ids`. `type: "webhook"`, `api_schema` with `url`, `method`, `request_body_schema`, `request_headers`. `response_timeout_secs` default 20 (5–300). `execution_mode`, `pre_tool_speech` (`auto`/`force`/`off`), `interruption_mode`, `tool_error_handling_mode`. | [Tools API](https://elevenlabs.io/docs/api-reference/tools/create) |
 | Values the LLM can't touch | A body property takes **one** value source: `description` (the LLM fills it), `dynamic_variable`, `constant_value`, or `is_omitted`. | [Tools API](https://elevenlabs.io/docs/api-reference/tools/create) |
 | Tool auth | Request headers can reference a workspace secret (`{secret_id}`). Auth connections cover OAuth2 and Basic only. **There is no request signing for tool webhooks.** | [Webhook tools](https://elevenlabs.io/docs/eleven-agents/customization/tools/webhook-tools) |
@@ -50,7 +56,7 @@ SMS/email confirmations, combining tables for large parties.
 | Today's date | Set `conversation_config.agent.prompt.timezone` to `Europe/London`. `{{system__time_date}}` renders as `Friday, 12 December 2025` and changes once a day, which keeps prompt caching intact. `{{system__time}}` changes every minute, so it stays out of the prompt. | same |
 | Per-environment tool URLs | Workspace environment variables: `https://{{system__env_<label>}}/...` in a tool URL, resolved per environment. The environment is chosen at session start (token request or `startSession`) and defaults to `production`. | [Environment variables](https://elevenlabs.io/docs/eleven-agents/integrate/environment-variables) |
 | Post-call webhook | Workspace-level, not per-agent. Types `post_call_transcription`, `post_call_audio`, `call_initiation_failure`. The payload has `data.transcript[]` with `tool_calls[]` and `tool_results[]` (including `tool_latency_secs`), `conversation_turn_metrics`, `metadata` (start, duration, cost), and `analysis` (`call_successful`, `transcript_summary`, evaluation and data-collection results). | [Post-call webhooks](https://elevenlabs.io/docs/eleven-agents/workflows/post-call-webhooks) |
-| Webhook signature | Header `ElevenLabs-Signature: t=<unix>,v0=<hex>`, HMAC-SHA256 over `"{t}.{raw_body}"`. The official SDK accepts timestamps up to 30 min old. Read from the SDK source (`elevenlabs` 2.74.1, `webhooks_custom.py`); the docs prose doesn't spell it out. | SDK source |
+| Webhook signature | Header `ElevenLabs-Signature: t=<unix>,v0=<hex>`, HMAC-SHA256 over `"{t}.{raw_body}"`. The official SDK accepts timestamps up to 30 min old. Read from the SDK source (`webhooks_custom.py`, 2.74.1 on 2026-10-25 and re-read at 2.75.0 on 2026-10-30, unchanged); the docs prose doesn't spell it out. | SDK source |
 | Webhook retries | **Off by default**; enable them per webhook. Up to 5 attempts (immediately, 30 s, 2 m, 8 m, 30 m). 5xx, 408, 429 and timeouts are retried; other 4xx are not. A webhook is auto-disabled after 10 or more consecutive failures with no success in 7 days. | [Webhooks](https://elevenlabs.io/docs/eleven-api/resources/webhooks) |
 | Private agent | `platform_settings.auth.enable_auth: true`. The browser then needs a signed URL (WebSocket, valid 15 min) or a conversation token from `GET /v1/convai/conversation/token` (WebRTC). Voice defaults to WebRTC. | [Authentication](https://elevenlabs.io/docs/eleven-agents/customization/authentication) |
 | React SDK | `@elevenlabs/react` 1.19.1. `useConversation` now **requires a `<ConversationProvider>`** ancestor. `startSession({ conversationToken, connectionType: "webrtc", dynamicVariables, environment })`. | [React SDK](https://elevenlabs.io/docs/eleven-agents/libraries/react) |
@@ -85,6 +91,18 @@ budget and what that changed.
 - Whether `tool_latency_secs` and `conversation_turn_metrics` are present in real webhook
   payloads, and in which nesting (the doc example and the SDK type disagree).
 - Whether the Free plan allows server tools, post-call webhooks and conversation tokens.
+- Whether a tool's `Authorization` header can reference a secret environment variable by label
+  (`{"env_var_label": "tool_bearer"}`), which the committed tool configs assume. The OpenAPI document
+  allows it; the docs the plan was written from describe `secret_id`. Fallback: `secret_id`.
+- ~~Whether the knowledge-base reuse check ever matches~~ Checked 2026-10-30: it does; the second
+  run printed "reused" (decisions #26, update).
+- Whether more than the `production` environment can be created on the Free plan. Only
+  `production` exists on the account today.
+- (Superseded by decisions #27: the workspace is provisioned by `scripts/setup_elevenlabs.py`, so
+  the CLI's registry format no longer matters.) How `agents add --from-file` and
+  `tools add --config-path` register existing config files, and whether `tools add` overwrites a
+  config that already exists. Try them first with
+  `--base-url http://127.0.0.1:9` so nothing is sent.
 
 ---
 
@@ -412,7 +430,7 @@ in `detail`, instead of FastAPI's default 422 body.
 - **Knowledge base:**
   - `menu.md` (dishes, prices, dietary tags, the UK's 14 allergens per dish), `usage_mode: prompt`
   - `restaurant.md` (hours and location, generated from `restaurant.py`)
-  - Uploaded by `scripts/upload_kb.py`, because the CLI can't upload documents.
+  - Uploaded by `scripts/setup_elevenlabs.py`, together with the tools, tests and agent.
 - **Analysis:**
   - Evaluation criteria: `confirmed_before_booking`, `no_third_party_disclosure`,
     `resolved_or_handed_off`.
@@ -453,20 +471,26 @@ in `detail`, instead of FastAPI's default 422 body.
 
 ## 9. Security checklist
 
-- [ ] Post-call webhook: HMAC verified over raw bytes, constant-time compare, stale **and**
+- [x] Post-call webhook: HMAC verified over raw bytes, constant-time compare, stale **and**
       future-dated timestamps rejected, verified before parsing. Tests cover a valid request, a
       tampered body, a wrong secret, a stale timestamp, a future timestamp, a missing header and a
-      malformed header.
+      malformed header. (`tests/test_webhooks.py`, mutation-checked. The constant-time compare
+      itself can't be shown by a test; it is read from the code.)
 - [ ] Server tools: bearer secret, constant-time compare, 401 without it. ElevenLabs stores the
       secret as a workspace secret, not in the tool config.
-- [ ] `ELEVENLABS_API_KEY` exists only in the backend's environment. The browser receives a
-      conversation token, which a test asserts. The agent has `enable_auth: true`.
-- [ ] Bookings: name + phone required, uniform `not_found`, the reference alone authorises nothing,
-      and `conversation_id` can't be set by the LLM.
+- [x] `ELEVENLABS_API_KEY` exists only in the backend's environment. The browser receives a
+      conversation token, which a test asserts. The agent has `enable_auth: true`. (The test is
+      `tests/test_session.py`; `enable_auth` is in the agent config and takes effect on the first
+      push, so it is not yet true on the platform.)
+- [x] Bookings: name + phone required, uniform `not_found`, the reference alone authorises nothing,
+      and `conversation_id` can't be set by the LLM. (The last by `tests/test_agent_config.py`,
+      which reads the committed tool configs.)
 - [ ] Prompt injection: authorisation is enforced in the backend, not the prompt. Evals include an
       injection attempt and an attempt to reach another caller's booking.
 - [ ] Logs: anything a caller said (names, phones, messages) is logged at DEBUG only. INFO logs
       carry tool name, outcome and timing.
+- [x] The tunnel must not expose what has no login: `/api/session` and the dashboard routes refuse
+      requests that came through it (decisions #24, `tests/test_local_only.py`).
 - [ ] Only if deployed (stretch): the dashboard behind a password and `/api/session` rate-limited,
       so a public URL can't burn agent minutes. The core deliverable has no public URL.
 - [ ] All data is fictional. Phone numbers come from the 07700 900000–900999 range that Ofcom
@@ -588,7 +612,9 @@ maitre-d/
 ├── tests/
 ├── agent/                 ElevenLabs CLI project: agents.json, agent_configs/, tool_configs/, tests.json, test_configs/
 ├── knowledge/             menu.md, restaurant.md (generated)
-├── scripts/               upload_kb.py, set_backend_host.py, bench_tools.py, seed.py
+├── scripts/               setup_elevenlabs.py, create_webhook.py, set_backend_host.py,
+│                          run_agent_tests.py, generate_knowledge.py, sync_agent_prompt.py,
+│                          export_openapi.py, bench_tools.py, seed.py, create_databases.py
 ├── frontend/              Vite + React + TypeScript
 ├── docs/                  plan.md, decisions.md
 ├── .github/workflows/     ci.yml
