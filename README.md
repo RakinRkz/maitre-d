@@ -12,21 +12,25 @@ Maître D is the backend for that agent. It owns the booking rules, exposes them
 voice agent as server tools, and leaves the guarantee that no table is ever booked twice to
 Postgres, where a constraint can enforce it.
 
-> **Status: milestone 1 of 3.** The booking domain, its database guarantees and the server-tool
-> endpoints are built and tested. The ElevenLabs agent, post-call webhook and dashboard are next.
-> There is no hosted demo.
+> **Status: built and tested, not yet run live.** The backend, the dashboard, the agent's
+> configuration and the evals are all in this repository and covered by tests. The one thing that has
+> **not** happened is a real call: the agent has not been created on an ElevenLabs account by the
+> setup script yet, so no end-to-end latency has been measured and the voice path is untested. Every
+> number below is local and says what it was measured on. [Known gaps](#known-gaps) lists the rest.
+> There is no hosted demo, on purpose (see [Run it with a voice agent](#run-it-with-a-voice-agent)).
 
-Built with Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2 (async), Alembic and PostgreSQL 17.
+Built with Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2 (async), Alembic and PostgreSQL 17 on the
+backend, and React, TypeScript (strict), Vite and TanStack Query on the dashboard.
 
 ## How it fits together
 
 ```mermaid
 flowchart LR
-    caller([Caller]) -->|voice| agent["ElevenLabs agent<br/>milestone 2"]
-    agent -->|"tool webhooks<br/>bearer secret"| api["FastAPI<br/>built"]
-    agent -.->|"post-call webhook<br/>HMAC, milestone 2"| api
-    api --> db[("Postgres<br/>bookings · messages · tool timings")]
-    dashboard["React dashboard<br/>milestone 2"] -->|REST| api
+    caller([Caller]) -->|voice| agent["ElevenLabs agent<br/>prompt · knowledge base · tools"]
+    agent -->|"tool webhooks<br/>bearer secret"| api["FastAPI<br/>tools · webhook · dashboard API"]
+    agent -->|"post-call webhook<br/>HMAC-signed"| api
+    api --> db[("Postgres<br/>bookings · calls · messages · tool timings")]
+    dashboard["React dashboard<br/>bookings · calls · timeline"] -->|"REST, local only"| api
     dashboard <-->|"WebRTC conversation token"| agent
 ```
 
@@ -128,9 +132,10 @@ one uvicorn worker, 200 sequential booking lifecycles after 10 warm-up rounds (2
 | `change_booking` | 5.7 / 7.4 | 9.5 / 12.2 |
 | `cancel_booking` | 4.2 / 5.6 | 8.0 / 10.5 |
 
-These are local numbers, not the round trip ElevenLabs will see through a tunnel. The dashboard will
-show both: the platform's `tool_latency_secs` and the server's own measurement, so network and
-platform overhead are visible separately.
+These are local numbers, not the round trip ElevenLabs sees through a tunnel; **that has not been
+measured**, because no live call has been made. The call timeline in the dashboard is built to show
+both for each tool call: the platform's `tool_latency_secs` and the server's own measurement, so
+network and platform overhead are visible separately.
 
 ### Only the right caller sees a booking
 
@@ -144,10 +149,63 @@ platform overhead are visible separately.
 - Phone numbers are normalised to E.164 with the UK as the default region. Names match by words,
   ignoring case, accents, punctuation and titles.
 - Anything a caller said — names, phone numbers, messages, transcripts — is logged at `DEBUG`.
-  `INFO` carries the tool name, outcome and timing only.
+  `INFO` carries the tool name, outcome and timing only. This is tested for the webhook and the
+  session route, and a failed database write used to break it: the error text quoted the whole
+  request. That was reproduced by a test, then fixed (`hide_parameters`).
+- **The post-call webhook is verified before it is parsed.** The signature is an HMAC over the raw
+  body bytes, compared in constant time, with a timestamp window on both sides (the platform's own
+  SDK helper checks only the past side and compares with `!=`). The body is read with a size cap
+  first, and every failure gets the same 401. A transcript is stored with each tool call's request
+  headers removed, because they can carry the bearer token.
+- **A tunnel publishes the whole app, so what has no login refuses it.** `/api/session` (which spends
+  voice minutes) and the dashboard routes (which list guests' names and numbers) answer 403 to any
+  request that came through a proxy, from another machine, with a `Host` other than localhost
+  (which stops DNS rebinding from a web page the operator has open), or that the browser labels
+  cross-site. The tools and the webhook stay
+  reachable: each has its own secret. Strangers can't grow the timing table either: only requests
+  the app answered are stored, and bodies over 64 KB are refused unread.
+- The browser gets a short-lived conversation token. The ElevenLabs API key never leaves the
+  server, and a test asserts the session response can't hold it.
 
-The post-call webhook will be HMAC-verified over the raw body bytes, with a timestamp window, before
-any JSON is parsed.
+## The dashboard
+
+One page, served by the backend or by Vite in development: today's bookings (London day, with
+cancelled ones marked), recent calls, messages left for staff, per-tool p50/p95, and a **Talk to the
+agent** button. Opening a call shows its timeline: the transcript interleaved with each tool call,
+the arguments, the sentence the agent was given, and two latency figures side by side, the
+platform's round trip and our server's time. The merge is a pure, unit-tested function
+(`frontend/src/lib/timeline.ts`).
+
+![The call timeline for a seeded demo call](docs/images/dashboard-call-timeline.png)
+
+*A seeded demo call: fictional data, and no timings, because nothing was measured. The latency
+columns say so rather than show a made-up number.* The frontend's types are generated from the
+backend's OpenAPI document, and CI fails if the committed copy has drifted.
+
+The "Talk" button is typechecked and linted but has never run a call: that needs a live agent and
+spends voice minutes.
+
+## The agent and its evals
+
+The agent is configured as code under `agent/`:
+
+- **The prompt** is Markdown (`agent/prompts/`), embedded into the config by a script, with a test
+  that fails if they differ, because a prompt inside a JSON string can't be reviewed in a diff.
+- **Six tool configs**, one JSON file each. A test reads them and fails if a tool's body drifts from
+  the Pydantic model its route parses. `conversation_id` is bound to the platform's system variable,
+  so the model can't choose it; a test pins that for every tool.
+- **A knowledge base** of two pages: a hand-written menu with the UK's 14 allergens per dish, and a
+  page of hours and rules **generated from `restaurant.py`**, so the agent can't promise a time the
+  backend would refuse. The prompt is tested not to repeat those facts.
+- **Limits** that protect a Free plan: authentication required, a call cap, a silence timeout, one
+  concurrent call, a daily conversation limit, and no bursting (which is billed at double).
+
+Five **agent tests** are defined in `agent/test_configs/`: the weekday/time/party-size assertion for
+"next Friday around eight", a full slot, an allergen question, someone else's booking, and a prompt
+injection. Simulations use mocked tool replies, so they don't depend on the database. They are shape-
+tested, and **have never been run**. Running one spends credits the platform doesn't document, so
+`scripts/run_agent_tests.py` refuses without `--confirm-spend` and prints the `credits_used` each run
+reports; run one, read the figure, then decide.
 
 ## The tool API
 
@@ -163,7 +221,7 @@ The backend exposes six server tools, one `POST` per tool, with the path equal t
 | `take_message` | Records a message for the events team |
 
 Requests carry `Authorization: Bearer <secret>` and a `conversation_id`. In the agent config,
-`conversation_id` will be bound to the platform's dynamic variable, so the model never fills it.
+`conversation_id` is bound to the platform's dynamic variable, so the model never fills it.
 Business outcomes — a full slot, a missing booking, a bad date — return **HTTP 200**, because the
 agent needs to read our sentence rather than interpret a status code:
 
@@ -185,8 +243,8 @@ caller-facing sentence and the field hints in `detail`.
 
 ## Run it locally
 
-Prerequisites: [uv](https://docs.astral.sh/uv/) and PostgreSQL 17 (Docker Compose is included). No
-Node.js is needed yet; the frontend arrives in milestone 2.
+Prerequisites: [uv](https://docs.astral.sh/uv/), Node.js 24 and PostgreSQL 17 (Docker Compose is
+included). This part needs no ElevenLabs account.
 
 From the repository root:
 
@@ -201,24 +259,19 @@ uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
 docker compose up -d --wait
 uv sync
 
-# 3. Schema and demo data. create_databases.py is safe to re-run.
+# 3. Schema and demo data (a week of bookings and two fictional calls). Safe to re-run.
 uv run python scripts/create_databases.py
 uv run alembic upgrade head
 uv run python scripts/seed.py --demo
 
-# 4. Start the API.
+# 4. Start the API, then the dashboard.
 uv run uvicorn maitre_d.main:create_app --factory --reload --port 8000
+cd frontend && npm ci && npm run dev        # http://localhost:5173
 ```
 
-Check it is up:
-
-```bash
-curl http://localhost:8000/api/health
-```
-
-A tool call looks like this. Replace the bearer value with the secret in `.env`, and use a future
-date that is really that weekday; Saffron Table is closed on Mondays. This example uses Friday
-6 November 2026.
+Check it is up with `curl http://localhost:8000/api/health`. A tool call looks like this. Replace
+the bearer value with the secret in `.env`, and use a future date that is really that weekday;
+Saffron Table is closed on Mondays. This example uses Friday 6 November 2026.
 
 ```bash
 curl -s http://localhost:8000/tools/check_availability \
@@ -233,7 +286,32 @@ curl -s http://localhost:8000/tools/check_availability \
   }'
 ```
 
-Without `TOOL_BEARER_SECRET`, every tool deliberately returns 500.
+Without `TOOL_BEARER_SECRET`, every tool deliberately returns 500. To serve the dashboard from the
+backend instead of Vite, run `npm run build` in `frontend/` and open http://localhost:8000.
+
+## Run it with a voice agent
+
+You need an ElevenLabs account and API key (the **Free plan** works: 15 voice minutes a month, no
+overage) and a way to give ElevenLabs a public address for your backend, such as a Cloudflare quick
+tunnel. Put `ELEVENLABS_API_KEY` in `.env`, then:
+
+```bash
+# Creates or updates, by name: the secret and its variable, the knowledge-base documents, the six
+# tools, the agent tests and the agent. Safe to re-run. It writes your tool bearer into the
+# workspace's secret store; use --skip-secret and make the secret by hand if you'd rather.
+uv run python scripts/setup_elevenlabs.py --dry-run     # the plan; no network
+uv run python scripts/setup_elevenlabs.py
+
+# Publish the backend, then point the platform at it. A quick tunnel gets a new hostname on every
+# start, so repeat the last two lines each time. Restart the backend after create_webhook.py.
+cloudflared tunnel --url http://localhost:8000
+uv run python scripts/set_backend_host.py <hostname>.trycloudflare.com
+uv run python scripts/create_webhook.py <hostname>.trycloudflare.com
+```
+
+Then click **Talk to the agent** in the dashboard. The agent config caps a call at three minutes (the platform's setting, not yet seen enforced), so a forgotten tab
+can't spend the month. The finished call arrives by webhook, a few seconds after it ends, and shows
+up in Recent calls with its timeline.
 
 ## Tests and checks
 
@@ -247,12 +325,25 @@ uv run python scripts/create_databases.py   # first run only
 uv run pytest
 uv run ruff check . && uv run ruff format --check . && uv run mypy
 uv run alembic check                        # models and migrations agree
+cd frontend && npm run typecheck && npm run lint && npm test && npm run build
 ```
 
-At the time of writing, the suite is **104 tests**, all passing (5.65 s on the Windows 11 dev laptop
-against local Postgres 17.11, 2026-10-30). Coverage includes the concurrent race, the raw-SQL
-constraint check, idempotent retries, DST edge cases, name-and-phone access control, and the HTTP
-contract including schema failures.
+At the time of writing: **383 backend tests** pass in 13.90 s, and **68 frontend tests** pass (the
+Windows 11 dev laptop against local Postgres 17.11, 2026-10-30). They cover the concurrent race, the
+raw-SQL constraint check, idempotent retries, DST edge cases, name-and-phone access control, the HTTP
+contract, the webhook's signature matrix, the session route, the local-only guard, the dashboard API,
+the timeline merge, and the agent configuration's agreement with the backend.
+
+**A passing test is not trusted until it has been made to fail.** New tests were checked by breaking
+the code they cover, one deliberate bug at a time (drop the constraint check, accept an empty
+secret, record every refusal, log the request on a failed write...) and watching the right test fail.
+That found several tests that were too weak, including one that could never fail, and they were
+fixed; `docs/decisions.md` records the ones that mattered.
+
+**Generated files fail the build when stale:** the knowledge-base page (from `restaurant.py`), the
+prompt embedded in the agent config, the OpenAPI document, and the frontend's TypeScript types. CI
+(`.github/workflows/ci.yml`) runs all of the above against a `postgres:17` service. Its commands
+have been run locally; the workflow itself has not yet run on GitHub.
 
 To measure tool latency against a running server:
 
@@ -267,48 +358,69 @@ creates.
 
 ```
 src/maitre_d/
-  main.py            create_app(): middleware, routers, validation handling
+  main.py            create_app(): middleware, routers, the built dashboard, error handling
   config.py          settings from the environment and .env
   db.py              async engine, session helpers, dining-table sync
-  models.py          SQLAlchemy tables mirroring the migration
+  models.py          SQLAlchemy tables mirroring the migrations
   restaurant.py      Saffron Table's facts: hours, tables, timezone
   timeslots.py       wall-clock time to UTC, DST-safe validation, slot grid
   bookings.py        availability, alternatives, and each booking tool
   speech.py          every caller-facing sentence
   schemas.py         the request/response contract with the agent
-  security.py        tool bearer authentication
+  security.py        tool bearer, webhook HMAC, the local-only guard
   invocations.py     latency middleware for /tools/*
-  routes/tools.py    the six server tools
-migrations/          Alembic; 0001 is the booking domain
-tests/               pytest against real Postgres
-scripts/             create_databases, seed, bench
+  elevenlabs.py      every outbound call to the ElevenLabs API
+  routes/            tools, webhooks, session, dashboard
+migrations/          Alembic
+tests/               pytest, mostly against real Postgres
+scripts/             setup_elevenlabs, create_webhook, set_backend_host, run_agent_tests,
+                     seed, bench_tools, and the generators for the files that must not go stale
+agent/               prompt (Markdown), agent config, six tool configs, five agent tests
+knowledge/           menu.md, and restaurant.md generated from restaurant.py
+frontend/            the dashboard
 docs/                plan.md and decisions.md
 ```
 
-## Roadmap
+## Known gaps
 
-| Milestone | State | Contents |
-|---|---|---|
-| **M1 · Booking domain** | done | Schema and constraint, availability and alternatives, booking tools, auth, latency logging, tests |
-| **M2 · Live agent** | next | Agent config as code, knowledge base, `/api/session`, post-call HMAC webhook, React dashboard, first real calls |
-| **M3 · Evals and CI** | later | ElevenLabs agent tests, GitHub Actions, demo recording |
+Said plainly, because a README that only lists strengths is not worth much:
 
-The project deliberately has no public deployment. The ElevenLabs account is on the Free plan (15
-voice minutes a month, no overage), so a public "Talk to the agent" button would let one visitor
-spend the month's minutes. The backend, the tests and the recorded demo are the deliverable; anyone
-can run the rest locally with their own key.
+- **No live call has been made.** So there is no measured end-to-end latency, the "Talk" button has
+  never run, and the shape of a real post-call payload (for example the names of the per-turn
+  metrics, and their unit) is assumed from the documentation and the API schema.
+- **The platform setup is untested against a full account.** The script has been run far enough to
+  create the knowledge-base documents, which also showed that its re-run check works, and to learn
+  that the platform accepts an environment-variable label in a tool header. Creating the tools, the
+  agent and the webhook has not completed.
+- **The agent tests have never been run**, so the cost of a run is unknown. The prompt's behaviour
+  on allergens, injection and other callers' bookings is asserted by tests that exist but haven't
+  executed.
+- **CI is unproven on GitHub.** The workflow's commands pass locally.
+- **No login on the dashboard.** It is local-only by construction (it refuses proxied requests); a
+  deployment would need a password and rate limiting, and there isn't one.
+- **A quick tunnel's address changes** on each start, and a webhook's URL can't be edited, so the
+  webhook is recreated each time.
+- Out of scope: phone numbers via Twilio, multilingual calls, SMS or email confirmation, combining
+  tables for large parties (more than eight take a message for the events team), and payments.
 
-Also out of scope for now: phone numbers via Twilio, multilingual calls, SMS/email confirmations,
-combining tables for large parties, and payments.
+The project deliberately has no public deployment. A Free plan has 15 voice minutes a month, so a
+public "Talk to the agent" button would let one visitor spend all of them, and a host that sleeps when
+idle would turn the first tool call into a long silence. Anyone can run all of this locally with
+their own key.
 
 ## Documentation
 
 - [`docs/plan.md`](docs/plan.md) — architecture, data model, tool contract and milestones
 - [`docs/decisions.md`](docs/decisions.md) — why the system is built this way, with alternatives
-  considered
+  considered (28 entries, including the ones that reversed an earlier choice)
+- [`docs/wip.md`](docs/wip.md) — what is done, what is open, and what was measured
 - [`CLAUDE.md`](CLAUDE.md) — working conventions and invariants for this repository
 
 ## A note on the data
 
 Saffron Table, its menu, its staff and every guest are fictional. Phone numbers use the
 07700 900000–900999 range that Ofcom reserves for drama, so nothing here can reach a real person.
+
+## Licence
+
+[MIT](LICENSE)
