@@ -155,6 +155,12 @@ it.
 - **Commits.** Small, one concern each. The subject says what changed for someone using the
   system. The body explains why, what was checked, and anything still wrong.
 
+- **WIP doc.** Update `docs/wip.md` as part of the change, not as an afterthought. After a
+  significant code change (a new tool, a changed reply contract, a fix that lands a checklist
+  item), tick the affected findings and coverage items, move unshipped M2/M5 items to the M2
+  checklist, record measured results and conditions, and update the status line before the
+  milestone it belongs to closes. If a wave finishes without updating it, the wave is not done.
+
 ## Data and secrets
 
 - All data is fictional. That covers the restaurant, the menu, and the guests. Phone numbers use
