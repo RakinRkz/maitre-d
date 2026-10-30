@@ -41,7 +41,8 @@ Last updated: 2026-10-30.
 | Tooling | `scripts/create_databases.py`, `scripts/seed.py`, `scripts/bench_tools.py` |
 
 Not built yet: the agent config (`agent/`), knowledge base (`knowledge/`), `/api/session`, the
-post-call HMAC webhook, the dashboard (`frontend/`), CI, README.
+post-call HMAC webhook, the dashboard (`frontend/`), CI. `README.md` now exists and describes M1;
+it will grow as those land.
 
 ## Review findings
 
