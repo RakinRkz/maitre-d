@@ -419,3 +419,52 @@ operation. A validation error quotes the value it rejected, which here can be a 
 **Pinned by.** `tests/test_webhooks.py`. A mutation run against it found two weak tests (a
 `Content-Length` pre-check that the streaming cap made redundant, which was deleted, and a logging
 test whose fixture the validation error truncated away); both were fixed and re-run.
+
+## 25. The prompt is written as Markdown and embedded in the agent config
+
+**Decision.** The prompt lives in `agent/prompts/saffron_table.md`. `scripts/sync_agent_prompt.py`
+copies it into the agent config's `prompt` string, and a test fails if the two differ.
+
+**Alternatives.** Edit the JSON string directly; generate the whole config from Python; keep the
+prompt only in the dashboard.
+
+**Why.** The prompt is the most important text in the agent, and inside JSON it is one line of `\n`
+escapes: a diff of it can't be reviewed. Generating the whole config from Python would hide the
+rest of it, which is meant to be plain wire JSON that `agents pull` can round-trip. The dashboard
+copy would not be code. The same pattern already protects `knowledge/restaurant.md`.
+
+## 26. The agent's limits, and the choices that are not yet measured
+
+**Decision.** The agent config sets:
+- `enable_auth: true`, `max_duration_seconds: 180`, `silence_end_call_timeout: 30`, concurrency 1,
+  10 conversations a day, and `bursting_enabled: false` (the API documents that bursting past the
+  concurrency limit is charged at double rate).
+- The `gemini-2.5-flash` model, which is the CLI's default template, not a measured choice.
+- Tool authentication as a reference to a secret environment variable labelled `tool_bearer`, not a
+  `secret_id`, so the committed files hold no credential and no account-specific ID.
+- `response_timeout_secs: 10`, `pre_tool_speech: auto`, `tool_error_handling_mode: auto`.
+
+**Alternatives.** The platform's default limits (concurrency unlimited, 100000 conversations a
+day); a `secret_id` in each tool config; comparing models by measurement.
+
+**Why.** On the Free plan the minutes are the scarce resource, and each limit caps what a mistake or
+a forgotten browser tab can spend. The 180 seconds is the plan's "each call under three minutes". A
+head-to-head model comparison was cut because it costs calls (plan §14), so the model is the CLI's
+default and its time to first byte is reported from the calls made anyway.
+
+**Not yet verified, and checked in M2's wire-up step.**
+- Whether a tool header can reference a secret environment variable by label on this plan; if not,
+  the configs take a `secret_id` and the setup script fills it in.
+- What the model sees when a tool returns a non-2xx status, which is what `tool_error_handling_mode`
+  decides.
+- Whether `silence_end_call_timeout` counts while the agent is speaking.
+
+**Update, 2026-10-30, from the first run against a real account.**
+- Creating a tool whose header names an environment-variable label the workspace doesn't have is
+  refused with `Environment variable with label 'tool_bearer' not found`. So the platform accepts
+  the label form and checks it when the tool is created. Whether the value is then sent on a real
+  tool call is still unverified.
+- Uploading the same knowledge-base text twice and comparing it with what the content endpoint
+  returns matched: the platform returns the text as uploaded, so the reuse check in
+  `ensure_text_document_outcome` works (second run: "reused"). That settles the doubt recorded in
+  decisions #11.

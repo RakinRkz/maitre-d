@@ -1,0 +1,2 @@
+# Credentials — never commit these. Use .env.example as the tracked template.
+.env

@@ -1,0 +1,60 @@
+{
+  "type": "webhook",
+  "name": "check_availability",
+  "description": "Check whether a table is free for a date, time and number of guests. If it is not, the reply has the nearest alternatives. Call this before you offer or confirm any booking, and never say a table is free until it has said so.",
+  "response_timeout_secs": 10,
+  "pre_tool_speech": "auto",
+  "tool_error_handling_mode": "auto",
+  "execution_mode": "immediate",
+  "api_schema": {
+    "url": "https://{{system__env_backend_host}}/tools/check_availability",
+    "method": "POST",
+    "content_type": "application/json",
+    "request_headers": {
+      "Authorization": {
+        "env_var_label": "tool_bearer"
+      }
+    },
+    "request_body_schema": {
+      "type": "object",
+      "required": [
+        "conversation_id",
+        "date",
+        "weekday",
+        "time",
+        "party_size"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "dynamic_variable": "system__conversation_id"
+        },
+        "date": {
+          "type": "string",
+          "description": "The date as YYYY-MM-DD, in London. Work it out yourself from today's date in your instructions, for example 'next Friday' or 'tomorrow'."
+        },
+        "weekday": {
+          "type": "string",
+          "enum": [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday"
+          ],
+          "description": "The day of the week. If the caller named a weekday, give exactly that one. If they said 'tomorrow' or gave a date, give the weekday of that date. The server uses it to catch a wrong date."
+        },
+        "time": {
+          "type": "string",
+          "description": "The start time as HH:MM on the 24-hour clock, London time, for example 20:00. 'Eight' for dinner is 20:00."
+        },
+        "party_size": {
+          "type": "integer",
+          "description": "The number of guests, as a whole number."
+        }
+      }
+    }
+  }
+}

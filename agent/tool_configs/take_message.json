@@ -1,0 +1,46 @@
+{
+  "type": "webhook",
+  "name": "take_message",
+  "description": "Leave a message for the restaurant's staff when you cannot help: a party larger than any table, a complaint, a private event, or anything else the other tools cannot do. Get the caller's name and phone number first.",
+  "response_timeout_secs": 10,
+  "pre_tool_speech": "auto",
+  "tool_error_handling_mode": "auto",
+  "execution_mode": "immediate",
+  "api_schema": {
+    "url": "https://{{system__env_backend_host}}/tools/take_message",
+    "method": "POST",
+    "content_type": "application/json",
+    "request_headers": {
+      "Authorization": {
+        "env_var_label": "tool_bearer"
+      }
+    },
+    "request_body_schema": {
+      "type": "object",
+      "required": [
+        "conversation_id",
+        "name",
+        "phone",
+        "message"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "dynamic_variable": "system__conversation_id"
+        },
+        "name": {
+          "type": "string",
+          "description": "The caller's name, as they gave it."
+        },
+        "phone": {
+          "type": "string",
+          "description": "The caller's phone number, as they said it, including any leading zero or country code."
+        },
+        "message": {
+          "type": "string",
+          "description": "What the caller wants the staff to know, in a sentence or two."
+        }
+      }
+    }
+  }
+}

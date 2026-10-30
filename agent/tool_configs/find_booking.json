@@ -1,0 +1,41 @@
+{
+  "type": "webhook",
+  "name": "find_booking",
+  "description": "Look up a caller's upcoming bookings from their name and phone number. Needed before changing or cancelling a booking. Both must come from the caller; a booking is only found when both match.",
+  "response_timeout_secs": 10,
+  "pre_tool_speech": "auto",
+  "tool_error_handling_mode": "auto",
+  "execution_mode": "immediate",
+  "api_schema": {
+    "url": "https://{{system__env_backend_host}}/tools/find_booking",
+    "method": "POST",
+    "content_type": "application/json",
+    "request_headers": {
+      "Authorization": {
+        "env_var_label": "tool_bearer"
+      }
+    },
+    "request_body_schema": {
+      "type": "object",
+      "required": [
+        "conversation_id",
+        "name",
+        "phone"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "dynamic_variable": "system__conversation_id"
+        },
+        "name": {
+          "type": "string",
+          "description": "The caller's name, as they gave it."
+        },
+        "phone": {
+          "type": "string",
+          "description": "The caller's phone number, as they said it, including any leading zero or country code."
+        }
+      }
+    }
+  }
+}

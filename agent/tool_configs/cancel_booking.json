@@ -1,0 +1,46 @@
+{
+  "type": "webhook",
+  "name": "cancel_booking",
+  "description": "Cancel a booking. Needs the reference from find_booking and the caller's name and phone. Call it only after the caller has confirmed which booking to cancel.",
+  "response_timeout_secs": 10,
+  "pre_tool_speech": "auto",
+  "tool_error_handling_mode": "auto",
+  "execution_mode": "immediate",
+  "api_schema": {
+    "url": "https://{{system__env_backend_host}}/tools/cancel_booking",
+    "method": "POST",
+    "content_type": "application/json",
+    "request_headers": {
+      "Authorization": {
+        "env_var_label": "tool_bearer"
+      }
+    },
+    "request_body_schema": {
+      "type": "object",
+      "required": [
+        "conversation_id",
+        "reference",
+        "name",
+        "phone"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "dynamic_variable": "system__conversation_id"
+        },
+        "reference": {
+          "type": "string",
+          "description": "The booking reference that find_booking returned for this caller, for example K7M2QX."
+        },
+        "name": {
+          "type": "string",
+          "description": "The caller's name, as they gave it."
+        },
+        "phone": {
+          "type": "string",
+          "description": "The caller's phone number, as they said it, including any leading zero or country code."
+        }
+      }
+    }
+  }
+}

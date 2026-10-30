@@ -1,0 +1,71 @@
+{
+  "type": "webhook",
+  "name": "change_booking",
+  "description": "Move an existing booking to another date or time, or change the number of guests. Needs the reference from find_booking and the caller's name and phone. Send only what changes. If you send a date, send its weekday too.",
+  "response_timeout_secs": 10,
+  "pre_tool_speech": "auto",
+  "tool_error_handling_mode": "auto",
+  "execution_mode": "immediate",
+  "api_schema": {
+    "url": "https://{{system__env_backend_host}}/tools/change_booking",
+    "method": "POST",
+    "content_type": "application/json",
+    "request_headers": {
+      "Authorization": {
+        "env_var_label": "tool_bearer"
+      }
+    },
+    "request_body_schema": {
+      "type": "object",
+      "required": [
+        "conversation_id",
+        "reference",
+        "name",
+        "phone"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "dynamic_variable": "system__conversation_id"
+        },
+        "reference": {
+          "type": "string",
+          "description": "The booking reference that find_booking returned for this caller, for example K7M2QX."
+        },
+        "name": {
+          "type": "string",
+          "description": "The caller's name, as they gave it."
+        },
+        "phone": {
+          "type": "string",
+          "description": "The caller's phone number, as they said it, including any leading zero or country code."
+        },
+        "date": {
+          "type": "string",
+          "description": "The new date as YYYY-MM-DD, in London, only if the date is changing. Always send the weekday with it."
+        },
+        "weekday": {
+          "type": "string",
+          "enum": [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday"
+          ],
+          "description": "The weekday of the new date, only when you send a date. If the caller named a weekday, give exactly that one."
+        },
+        "time": {
+          "type": "string",
+          "description": "The new start time as HH:MM on the 24-hour clock, London time, only if the time is changing."
+        },
+        "party_size": {
+          "type": "integer",
+          "description": "The new number of guests, only if it is changing."
+        }
+      }
+    }
+  }
+}

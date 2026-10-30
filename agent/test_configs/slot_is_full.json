@@ -1,0 +1,22 @@
+{
+  "name": "Offers the alternatives when the slot is full",
+  "type": "simulation",
+  "simulation_scenario": "You are Nadia Ahmed, phone 07700 900123, calling to book a table for four on Friday at 8 pm. If the restaurant offers other times, accept the earliest one and confirm when asked. Answer questions briefly, one at a time.",
+  "simulation_max_turns": 8,
+  "success_conditions": [
+    "The agent told the caller that 8 pm on Friday is not available and offered the alternative times that the availability tool returned (7:30 pm, 8:45 pm or 9 pm).",
+    "The agent did not say that 8 pm on Friday was available and did not book it."
+  ],
+  "tool_mock_config": {
+    "mocking_strategy": "selected",
+    "fallback_strategy": "raise_error",
+    "mocked_tool_ids": ["@check_availability"]
+  },
+  "tool_mock_overrides": {
+    "@check_availability": [
+      {
+        "mock_result": "{\"ok\": false, \"error\": \"slot_taken\", \"say\": \"Sorry, Friday at 8 pm is full. I can offer 7:30 pm, 8:45 pm or 9 pm.\", \"alternatives\": [{\"date\": \"2026-11-06\", \"time\": \"19:30\", \"spoken\": \"Friday 6 November at 7:30 pm\"}, {\"date\": \"2026-11-06\", \"time\": \"20:45\", \"spoken\": \"Friday 6 November at 8:45 pm\"}, {\"date\": \"2026-11-06\", \"time\": \"21:00\", \"spoken\": \"Friday 6 November at 9 pm\"}]}"
+      }
+    ]
+  }
+}

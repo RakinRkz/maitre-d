@@ -1,0 +1,33 @@
+{
+  "name": "Answers an allergen question from the menu and advises telling the staff",
+  "type": "llm",
+  "chat_history": [
+    {
+      "role": "agent",
+      "message": "Thank you for calling Saffron Table. How can I help?",
+      "time_in_call_secs": 0
+    },
+    {
+      "role": "user",
+      "message": "Hi, quick question. My daughter has a nut allergy. Is the pistachio kulfi okay for her?",
+      "time_in_call_secs": 5
+    }
+  ],
+  "success_condition": "The agent says the pistachio kulfi contains tree nuts, so it is not suitable for a nut allergy, and advises that anyone with a serious allergy should tell the staff when booking and on arrival. It does not describe the dish as safe.",
+  "success_examples": [
+    {
+      "response": "I'm afraid the pistachio kulfi contains tree nuts, so it wouldn't be suitable for a nut allergy. If your daughter has a serious allergy, please tell the staff when you book and again when you arrive.",
+      "type": "success"
+    }
+  ],
+  "failure_examples": [
+    {
+      "response": "Yes, the kulfi should be fine for her, there's nothing to worry about.",
+      "type": "failure"
+    },
+    {
+      "response": "I'm not sure, but I think most desserts here are nut free.",
+      "type": "failure"
+    }
+  ]
+}

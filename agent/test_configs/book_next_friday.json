@@ -1,0 +1,45 @@
+{
+  "name": "Books a table for four next Friday around eight",
+  "type": "tool",
+  "chat_history": [
+    {
+      "role": "agent",
+      "message": "Thank you for calling Saffron Table. How can I help?",
+      "time_in_call_secs": 0
+    },
+    {
+      "role": "user",
+      "message": "Hi, I'd like a table for four next Friday, around eight.",
+      "time_in_call_secs": 4
+    }
+  ],
+  "tool_call_parameters": {
+    "referenced_tool": {
+      "id": "@check_availability",
+      "type": "webhook"
+    },
+    "parameters": [
+      {
+        "path": "weekday",
+        "eval": {
+          "type": "exact",
+          "expected_value": "Friday"
+        }
+      },
+      {
+        "path": "time",
+        "eval": {
+          "type": "exact",
+          "expected_value": "20:00"
+        }
+      },
+      {
+        "path": "party_size",
+        "eval": {
+          "type": "exact",
+          "expected_value": "4"
+        }
+      }
+    ]
+  }
+}
