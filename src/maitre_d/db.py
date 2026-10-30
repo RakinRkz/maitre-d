@@ -21,7 +21,9 @@ from maitre_d.models import DiningTable
 
 
 def make_engine(url: str) -> AsyncEngine:
-    return create_async_engine(url, pool_pre_ping=True)
+    # hide_parameters: a database error otherwise quotes the values it was given, and for a tool
+    # request those are a guest's name and phone number. Caller speech is DEBUG-only.
+    return create_async_engine(url, pool_pre_ping=True, hide_parameters=True)
 
 
 def make_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

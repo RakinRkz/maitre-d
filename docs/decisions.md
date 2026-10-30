@@ -323,6 +323,24 @@ Most of the client-to-server gap is the HTTP stack on this machine. `/api/health
 database and no logging, has a client round trip of 2.8 ms p50. These are local numbers; the
 deployed ones (M5) will include the real network between ElevenLabs and the host.
 
+**Update, 2026-10-30.** The claim above that the middleware "covers every request, including the
+ones refused" did not survive the tunnel. Once `/tools/*` is on a public hostname, anyone who finds
+it can produce a 401 or a 404 for free, and each one was a database row; a request body was also
+buffered and stored before auth. Three changes, each pinned by `tests/test_invocations.py`:
+- A request is stored only if the app answered it (200) or failed on it (5xx). Refusals (401, 404,
+  405, 413) are still logged as a line, so a mistyped secret on the ElevenLabs side is visible.
+- The middleware reads the body itself, capped at 64 KB, and answers 413 before the app sees an
+  oversized one. (Raising from `receive` doesn't work: FastAPI turns any error raised while it
+  reads a body into its own 400. That was tried first and the test caught it.)
+- The engine is created with `hide_parameters=True`. The failure was reproduced before it was
+  fixed: when the log write failed, the ERROR line contained the whole request, including a phone
+  number, which broke the rule that caller speech is logged at DEBUG only.
+- A body that is not JSON used to get past the bearer check. FastAPI parses a JSON body before it
+  runs dependencies, so such a request reached the validation handler first, which answers with
+  the friendly 200 (decisions #4). A stranger got a 200 instead of a 401, and the middleware stored
+  a row for it. Found by a security review of this change, reproduced by a test, and fixed by
+  authenticating inside the validation handler before it says anything.
+
 ## 20. Dining tables are reference data in code, synced to the database
 
 **Decision.** `restaurant.TABLES` defines the tables. `sync_dining_tables()` upserts them into

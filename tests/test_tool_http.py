@@ -61,15 +61,14 @@ async def test_replies_leave_out_fields_that_do_not_apply(client: AsyncClient) -
     assert set(reply) == {"ok", "booking", "say"}
 
 
-async def test_every_tool_call_is_logged_with_its_server_time(
+async def test_a_tool_call_is_logged_with_its_server_time(
     client: AsyncClient, engine: AsyncEngine
 ) -> None:
+    """The row carries what the dashboard's latency figures are computed from.
+
+    Refused requests are deliberately not rows; `tests/test_invocations.py` covers those.
+    """
     await client.post("/tools/create_booking", json=booking_request(conversation_id="conv_logged"))
-    await client.post(
-        "/tools/check_availability",
-        json={"conversation_id": "c", **slot()},
-        headers={"Authorization": ""},
-    )
 
     async with engine.connect() as connection:
         rows = (
@@ -81,7 +80,7 @@ async def test_every_tool_call_is_logged_with_its_server_time(
             )
         ).all()
 
-    booked, refused = rows
+    [booked] = rows
     assert (booked.conversation_id, booked.tool, booked.ok, booked.http_status) == (
         "conv_logged",
         "create_booking",
@@ -90,4 +89,3 @@ async def test_every_tool_call_is_logged_with_its_server_time(
     )
     assert booked.server_ms > 0
     assert booked.say.startswith("Booked:")
-    assert (refused.tool, refused.ok, refused.http_status) == ("check_availability", False, 401)

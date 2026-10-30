@@ -8,7 +8,7 @@ bug (500) is anything else. See docs/decisions.md #4.
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,6 +95,16 @@ def _describe(error: dict[str, object]) -> str:
 
 
 async def tool_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # FastAPI parses a JSON body before it runs the auth dependency, so a body that is not JSON
+    # arrives here first. Answering it with the friendly 200 below would let a stranger past the
+    # bearer check, and the middleware would store a row for each one. Authenticate before helping.
+    try:
+        require_tool_bearer(request, request.headers.get("authorization"))
+    except HTTPException as refusal:
+        return JSONResponse(
+            {"detail": refusal.detail}, status_code=refusal.status_code, headers=refusal.headers
+        )
+
     problems = list(dict.fromkeys(_describe(e) for e in exc.errors()))
     # The caller hears one short sentence; the field hints are for the model and go in `detail`.
     reply = ToolReply(
