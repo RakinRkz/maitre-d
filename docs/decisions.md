@@ -32,6 +32,14 @@ stored in a `UNIQUE` column. The service looks the key up before inserting; a co
 loses on the unique constraint and returns the winner's booking. `notes` is excluded. Separately,
 one conversation can't create two bookings for the same phone on the same date.
 
+The key is kept when a booking is moved, so a late retry of the original create can't book the old
+slot twice. That makes a key hit ambiguous: it is a true retry only when the stored booking is
+confirmed and still matches the requested slot and party size; then it returns the booking as
+`ok: true`. If the booking no longer matches — because `change_booking` moved it earlier in the
+call — the reply is `ok: false`, `error: "already_booked_this_call"`, carrying the current booking.
+The old slot is never reported as booked, and no duplicate is created. Cancelling clears the key,
+so a cancelled row does not reach that branch.
+
 **Alternatives.**
 - Key on the conversation ID alone, which allows one booking per call.
 - A client-generated key, but the LLM is the client and can't be trusted to keep one.
@@ -68,8 +76,10 @@ and builds slot grids in local time.
 ## 4. Tool outcomes are HTTP 200 with `ok` and a speakable `say`
 
 **Decision.** Full slot, not found and invalid date all return 200 with
-`{ok: false, error, say, alternatives?}`. Request-schema failures also return 200, with a message
-telling the LLM the expected format. Only auth failures (401) and bugs (500) are non-2xx.
+`{ok: false, error, say, alternatives?}`. Request-schema failures also return 200: `say` is a
+generic caller-facing sentence ("Sorry, I didn't catch that. Could you say it again?") and the
+field-by-field hints for the model travel in `detail`. Only auth failures (401) and bugs (500) are
+non-2xx.
 
 **Alternatives.** REST-style 404/409/422 bodies.
 
@@ -214,3 +224,152 @@ platform's tool data.
 Tool invocations are queried across calls (p50/p95 per tool), and they record what our server
 measured, which the platform's numbers can't: the platform sees round-trip time, while we see
 handler time. The difference between them is the network and platform overhead.
+
+---
+
+*Decisions 16–20 came out of building and testing M1.*
+
+## 16. Booking writes for a day queue on an advisory lock
+
+**Decision.** Before inserting or moving a booking, the transaction takes
+`pg_advisory_xact_lock(namespace, day)` for the booking's local day. It does **not** re-read
+availability after getting the lock.
+
+**What showed this was needed.** The first run of the race test forced twelve callers to read
+availability before any of them wrote, and one request failed with `deadlock detected`, not with
+an exclusion violation. Postgres checks an exclusion constraint after the new row is already in
+the index, so two transactions inserting clashing rows at the same instant can each find the
+other's row and wait for it. The Postgres source says as much (`execIndexing.c`: "There is a
+chance of deadlock, if two backends insert a tuple at the same time"). The deadlock detector
+resolves it, but only after `deadlock_timeout` (1 s by default). Retrying the same table after
+a deadlock was correct but slow: in a twelve-way pile-up the cycles kept re-forming, and the test
+took 47 s. With the per-day queue it took 0.37 s, with no deadlocks.
+
+**Alternatives.**
+- **Treat a deadlock as a lost race and retry.** Correct, but each deadlock costs a second of
+  silence on the phone.
+- **Lower `deadlock_timeout`.** It needs superuser rights, which managed Postgres doesn't give.
+- **`SELECT … FOR UPDATE` on the table row.** A request that loses on one table keeps that row
+  locked while it tries the next, and `change_booking` tries tables in a different order, which
+  risks lock-order deadlocks.
+- **Re-read availability once the lock is held,** and drop the constraint. That moves the
+  guarantee back into Python, which #1 rejected.
+
+**Why.** One lock per day can't form a lock-order cycle. It's held only for the few milliseconds
+of an insert and commit, and a restaurant takes nowhere near enough bookings for a day to make
+that queue matter. Because availability isn't re-read, which caller gets a table is still decided
+by the constraint. The test that drops the constraint still double-books, so it still proves that.
+The deadlock itself depends on timing inside the server and doesn't happen on every run, so a
+separate test pins down the queue's behaviour directly.
+
+## 17. Names match by words, ignoring case, accents, punctuation and titles
+
+**Decision.** Every word the caller gives must appear in the booking's name. "Ahmed", "Nadia" and
+"Mrs Ahmed" all match "Nadia Ahmed"; "Nadia Khan" doesn't. The phone number must match exactly
+after E.164 normalisation.
+
+**Alternatives.**
+- Exact full-name match, which fails whenever a caller gives only a surname, or uses a title.
+- Fuzzy matching (edit distance), which absorbs speech-recognition errors but also lets near
+  guesses through.
+
+**Why.** The phone number is the strong factor. The name stops someone who knows only a number
+from hearing what's booked against it, so it should be strict about wrong names and relaxed about
+how a right name is said. Fuzzy matching is the next step if real calls show misheard spellings
+failing; it is a deliberate loosening, not a default.
+
+## 18. Phone numbers must be "possible", not "valid"
+
+**Decision.** `phonenumbers.is_possible_number_with_reason(...) == IS_POSSIBLE`, with UK as the
+default region.
+
+**Alternatives.** `is_valid_number`, which checks the number against allocated ranges.
+
+**Why.** `is_valid_number` rejects the Ofcom drama range (07700 900xxx) that all the fictional
+data uses, because those numbers are deliberately unallocated. More importantly, it would turn
+away a real caller whose newly allocated number isn't in the library's metadata yet. The plain
+`is_possible_number` was too loose: it accepted "0770" as a possible *local* number. A test caught
+that.
+
+## 19. Tool latency is timed by ASGI middleware and logged after the response
+
+**Decision.** `ToolInvocationLog` wraps every `/tools/*` request. Its clock starts when the request
+reaches the app and stops after the last byte of the response is sent. It then writes the
+`tool_invocations` row.
+
+**Alternatives.**
+- Timing inside each handler, which misses parsing, validation, auth failures and serialisation.
+- FastAPI `BackgroundTasks`.
+- Logs only, with no database row.
+
+**Why.** Middleware covers every request, including the ones refused before a handler runs. The
+write comes after the final `send`, so it is not in the caller's pause, and that was measured,
+not assumed. A second server with an artificial 50 ms sleep before the write moved the client
+round trip from 5.9 to 6.9 ms (p50, 40 requests), not by 50 ms, because uvicorn completes the
+response at the final `send`.
+
+Measured on the development laptop (Windows 11, Postgres 17.11 on localhost, one uvicorn worker),
+sequentially, 200 booking lifecycles after 10 warm-up rounds, 2026-10-25:
+
+| tool | server p50 / p95 ms | client p50 / p95 ms |
+|---|---|---|
+| check_availability | 2.3 / 2.9 | 5.9 / 7.7 |
+| create_booking | 5.3 / 7.1 | 9.0 / 11.6 |
+| find_booking | 2.2 / 3.4 | 5.9 / 8.4 |
+| change_booking | 5.7 / 7.4 | 9.5 / 12.2 |
+| cancel_booking | 4.2 / 5.6 | 8.0 / 10.5 |
+
+Most of the client-to-server gap is the HTTP stack on this machine. `/api/health`, with no
+database and no logging, has a client round trip of 2.8 ms p50. These are local numbers; the
+deployed ones (M5) will include the real network between ElevenLabs and the host.
+
+## 20. Dining tables are reference data in code, synced to the database
+
+**Decision.** `restaurant.TABLES` defines the tables. `sync_dining_tables()` upserts them into
+`dining_tables`, and is run by `scripts/seed.py` and the test fixtures. Availability reads seat
+counts from `restaurant.py`, not from the database.
+
+**Alternatives.**
+- Insert the rows in a migration.
+- Make the database the only source and query it for every availability check.
+
+**Why.** Tables, like opening hours, are facts about the restaurant, and keeping them in one
+module keeps them in one place. A migration that copies them would be a second definition, frozen
+on the day it was written. Reading seats from code saves a query on every check. The database
+table still exists, so bookings can hold a foreign key and the dashboard can show labels.
+
+## 21. Built for the Free plan: no public live agent
+
+**Decision.** The project runs on the ElevenLabs Free plan (15 voice minutes a month, no overage)
+and pays for no hosting. The deliverable is the repository, a README with measured numbers, and a
+recorded call. Public deployment is a stretch goal, and even then without a public "Talk" button.
+
+**Alternatives.**
+- Starter ($6 a month, 75 minutes) with a deployed, password-gated demo.
+- Free hosting tiers with a public "Talk" button.
+
+**Why.** The budget is zero. On Free, a public button is a liability: one curious visitor can
+spend the month's minutes, and the link then fails for the next person. Free hosts sleep when
+idle, and a sleeping backend makes the first tool call of a call a long silence, which would show
+off the latency work at its worst. Every hard problem in the project lives in the backend, so it
+can be shown, tested and measured without a public deployment. Anyone who wants to talk to the
+agent can run it with their own key; the README makes that a few commands.
+
+## 22. A tool reply separates what the caller hears from what the model reads
+
+**Decision.** `ToolReply` has two text fields. `say` is one short sentence the agent reads aloud,
+written for the caller, with no field names or formats in it. `detail` is optional guidance for
+the model — currently the field hints on a schema failure — and is never spoken. Successful
+replies omit `detail` through `response_model_exclude_none=True`.
+
+**Alternatives.**
+- One `say` field carrying both the sentence and the hints, which is what M1 started with. The
+  model read "The request was not valid: date must be YYYY-MM-DD…" and could say it to a caller.
+- A generic `say` with no hints anywhere, leaving the model to guess from FastAPI's 422 body.
+- A separate error field per field, which the model has to reassemble before it can retry.
+
+**Why.** The two readers want opposite things. A caller needs a short, natural sentence and cannot
+act on "date must be YYYY-MM-DD"; the model needs the exact field and format to fix its next call
+and gains nothing from conversational padding. Splitting them lets each be written and tested for
+its own reader, and keeps schema vocabulary out of the voice. It also leaves room to add model
+guidance later without risking it being read aloud.
