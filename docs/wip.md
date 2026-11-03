@@ -4,26 +4,29 @@ State, open items and next actions. The design is in `docs/plan.md` and the reas
 `docs/decisions.md`. This file says what is true now and what is left, and is updated in the same
 change as the code (see `CLAUDE.md`).
 
-Last updated: 2026-10-30.
+Last updated: 2026-11-03.
 
 ## Status
 
 Everything in the plan is built and tested except the public deployment (a deliberate non-goal on
-the Free plan). **No live call has been made**, and the platform side is only partly set up.
+the Free plan). **Three real calls have been made (2026-11-03); the first worked end to end.** The agent,
+tools, tests and post-call webhook are on the platform, and `backend_host` points at a quick tunnel
+to this machine. The agent tests have never been run.
 
 | Area | State |
 |---|---|
 | Booking domain, server tools, auth, timing log | built, tested |
 | Post-call webhook, `calls` table | built, tested |
 | `/api/session`, the dashboard read API, the local-only guard | built, tested |
-| Dashboard frontend (React) | built, tested; the Talk button is typechecked only |
-| Agent as code, knowledge base, five agent tests | built, shape-tested; **never run** |
-| `setup_elevenlabs.py`, `create_webhook.py`, `run_agent_tests.py` | built, tested against a stateful fake; `setup` run for real as far as the secret |
+| Dashboard frontend (React) | built, tested; the Talk button started the one real call but has no automated test |
+| Agent as code, knowledge base, five agent tests | built, shape-tested, on the platform since 2026-11-02; the agent has taken one real call; the five tests have **never been run** |
+| `setup_elevenlabs.py`, `create_webhook.py`, `run_agent_tests.py` | built, tested against a stateful fake; `setup`, `set_backend_host` and `create_webhook` run for real on 2026-11-02 (`run_agent_tests` has not been) |
 | CI (`.github/workflows/ci.yml`) | written; its commands pass locally; **has not run on GitHub** |
 | README, LICENSE | written |
 
-All of it is committed on `main`, in small commits, one concern each. Nothing has been pushed, and
-there is no GitHub remote yet.
+All of it is committed on `main`, in small commits, one concern each, and pushed to `origin`
+(`github.com/RakinRkz/maitre-d`, a public repository). Until 2026-11-03 the remote held only the
+first four commits.
 
 ## Verified on 2026-10-30
 
@@ -54,49 +57,106 @@ migrations each run.
   check that nothing needed (deleted), and an "any versus all" polling rule. The frontend agent ran
   19 breaks against `timeline.ts` and found and fixed one real bug.
 
-## Blocked on the owner
+## What the assistant cannot do for itself
 
-Two steps were refused by the environment's permission layer and are not worked around. Both are
-needed to finish the platform setup. Allow them (or run the commands yourself), in this order:
+The environment's permission layer refuses two kinds of action from the assistant: writing a
+credential to the workspace secret store, and starting the tunnel. An explicit "go" in the
+conversation did not change that (2026-11-02), and neither was worked around. The owner did both
+in their own terminal, and the assistant then ran the other steps. If the tunnel restarts, the
+owner starts it again; a quick tunnel gets a new hostname every time, so these are repeated:
 
-1. **Write the tool bearer to the workspace secret store.**
-   `uv run python scripts/setup_elevenlabs.py` does it. If you would rather not let a script hold the
-   bearer, create a workspace secret named `tool_bearer` whose value is `Bearer <TOOL_BEARER_SECRET>`,
-   then a **secret-type** environment variable labelled `tool_bearer` pointing at it, and run
-   `setup_elevenlabs.py --skip-secret`. Until the variable exists, creating the tools fails with
-   `Environment variable with label 'tool_bearer' not found` (seen on 2026-10-30).
-2. **Publish the backend through a tunnel.**
-   `cloudflared tunnel --url http://localhost:8000`, then `set_backend_host.py <host>` and
-   `create_webhook.py <host>`, then restart the backend so it reads the new webhook secret.
+1. Start the tunnel and note the `<hostname>.trycloudflare.com` it prints. Leave it running.
+   PowerShell: `& "$env:LOCALAPPDATA\Programs\cloudflared\cloudflared.exe" tunnel --url http://localhost:8000`
+   Git Bash: `"$LOCALAPPDATA/Programs/cloudflared/cloudflared.exe" tunnel --url http://localhost:8000`
+   (PowerShell needs the leading `&` to run a quoted path.)
+2. `uv run python scripts/set_backend_host.py <hostname>.trycloudflare.com`
+3. `uv run python scripts/create_webhook.py <hostname>.trycloudflare.com`, then restart the backend
+   (`uv run uvicorn maitre_d.main:create_app --factory --port 8000`) so it reads the new secret.
 
-After that, the first real call is the owner's: it needs a microphone and spends voice minutes.
+Calls are the owner's: they need a microphone and spend voice minutes.
 
 ## State of the ElevenLabs account
 
-Created by `setup_elevenlabs.py --skip-secret` on 2026-10-30: the `backend_host` environment
-variable (value `tunnel-not-started.invalid`, which can never resolve) and the knowledge-base
-documents `menu.md` and `restaurant.md`. A second run reused both documents (the platform returns
-uploaded text verbatim, so the re-run check works). Nothing else exists: no secret, tool, agent,
-test or webhook. `.env` still holds placeholder values for `ELEVENLABS_AGENT_ID` and
-`ELEVENLABS_WEBHOOK_SECRET`; the scripts replace them when they succeed.
+Read back through the API on 2026-11-02, after `setup_elevenlabs.py` (run by the owner),
+`set_backend_host.py` and `create_webhook.py`:
+- environment variables: `tool_bearer` (secret) and `backend_host`, pointing at the quick tunnel
+  that was running that day (it stops resolving when the tunnel stops);
+- six tools (`cancel_booking`, `change_booking`, `check_availability`, `create_booking`,
+  `find_booking`, `take_message`);
+- the agent `Saffron Table`, with all six tools and both knowledge-base pages attached;
+- five agent tests;
+- one workspace webhook, `Saffron Table post-call`, HMAC-signed, enabled, pointing at
+  `/webhooks/elevenlabs` on the tunnel. The workspace's post-call settings have it for the
+  `transcript` event only, with audio off.
+
+`.env` holds the agent ID and the webhook secret (only whether they are filled in was checked).
+
+Checked through the tunnel the same day, with the backend running: `/api/health` answers 200;
+`/api/bookings` and `POST /api/session` answer 403 (the local-only guard sees real cloudflared
+headers and refuses, which is what it is for); an unauthenticated tool call and an unsigned
+webhook both answer 401; `/docs` answers 404; and one authenticated read-only `check_availability`
+call returned `ok`. That last call came from this machine, not from the platform, so it shows
+the bearer path and the tunnel work, not that the platform sends the header. Its log row was
+removed so it does not count towards the latency panel.
+
+## First live call, 2026-11-03
+
+Started from the dashboard's Talk button (the platform records the source as the React SDK) with
+the backend and Postgres on this machine, reached through the quick tunnel. Read back from the
+stored call, the `tool_invocations` rows and the bookings table.
+
+- **It worked.** 134 s; the agent ended it (`termination_reason`: "end_call tool was called");
+  the platform's analysis marked it successful (score 100) and all three evaluation criteria passed
+  (`resolved_or_handed_off`, `confirmed_before_booking`, `no_third_party_disclosure`). One booking
+  exists, with one idempotency key.
+- **The webhook worked on a real signature:** the call was stored 13 s after it ended, so the
+  HMAC verification, the header scrub and the upsert have now seen a real payload.
+- **Tool latency, one sample:** the platform's `tool_latency_secs` was 0.63 s for
+  `check_availability` and 0.45 s and 0.52 s for the two `create_booking` calls it waited for; our
+  middleware measured 3.8, 4.7 and 4.1 ms for the same requests. The platform also reported
+  0.79 to 1.12 s for the model to write a tool request (six samples) and 0.36 to 1.34 s to start
+  answering (sixteen). Three requests from one call on one network are not a distribution; the
+  README says so.
+- **Cost:** the platform's `cost` for the call is 1,619, and the account's usage went to 1,619 of
+  10,000 credits (Free plan, resets monthly). That is about 12 credits per second for this call
+  (134 s), so the plan's "15 minutes" is nearer 14 minutes at this rate. One call, so a rough guide.
+  After two more calls (below) the account is at 4,463 of 10,000, so 5,537 are left.
+- **Two more calls the same day** (05:25 and 05:27 UTC, 81 s and 149 s, costing 982 and 1,862
+  credits) both ended with "Client disconnected" when the caller closed the page, and the
+  platform's analysis marked both `resolved_or_handed_off` as failure. The first of the two never
+  reached our server; the second made two `check_availability` requests, the first recorded by the
+  platform as abandoned, as below. Not investigated further.
+- **Found: the booking tool was abandoned and called three times** (decisions #29). The caller
+  said "yes" while `create_booking` ran; the platform recorded "Tool execution was abandoned due
+  to user input", and the agent called it twice more. Our log has three requests answered `ok` with
+  one reference, and the database has one booking. The key did its job. Whether to stop the
+  repeats (prompt wording, tool settings) is undecided and untested.
+- **Answered from `plan.md` §2:** the conversation ID is filled by the platform and not by the
+  model; `{{system__env_backend_host}}` works as a host; the bearer variable reference is sent;
+  `tool_latency_secs` and `conversation_turn_metrics` are in real payloads (names in decisions #28).
+- **Not answered:** what the model sees on a non-2xx status (every request got a 200); whether the
+  platform retries on its own; whether the 180 s cap and the 30 s silence timeout are enforced (the
+  call was shorter and never silent that long).
+- **The README now has a screenshot of the bookings after the live calls** (the owner's own
+  capture). It shows a first name and a made-up phone number outside the 07700 900000 to 900999
+  range, which the repo's fictional-data rule asks for; the owner chose to use it. The row's name
+  on the screen is not the name in the database for that booking, and this was not traced.
 
 ## Next actions
 
-1. Unblock the two steps above, then `setup_elevenlabs.py`; confirm each tool is created.
-2. Answer the "to verify" list in `plan.md` §2 from the first real call, and record the results:
-   whether the tool header's variable reference is sent, what the model sees on a non-2xx status,
-   the names and unit of `conversation_turn_metrics`, whether `silence_end_call_timeout` counts
-   while the agent speaks, and whether the 180 s cap is enforced.
-3. Make one or two calls, each under three minutes (announce the spend first). Record
-   `tool_latency_secs` next to our server time and the call count; put them in the README with
-   the conditions.
+1. Decide what to do about the abandoned-and-repeated booking call (decisions #29): try a prompt
+   or tool-setting change, then judge it with a second call (about 1,600 credits of the 5,537 left).
+2. Still to answer from a call: whether `silence_end_call_timeout` counts while the agent speaks,
+   whether the 180 s cap is enforced, and what the model sees on a non-2xx status. The last needs a
+   deliberate failure, for example a wrong bearer on a copy of one tool, which costs a call.
+3. If another call is made, record `tool_latency_secs` next to our server time again and add the
+   samples to the README with their conditions. Announce the spend first.
 4. Run **one** agent test with `--confirm-spend`, read `credits_used`, then decide how many of the
    other four to run. Put the measured cost in the README.
-5. Record a demo call and take a dashboard screenshot from the real call (the one in the README is
-   seeded demo data).
-6. Create the GitHub remote and push (the owner's call), then fix whatever the first CI run finds.
-   Before publishing the history, note that the commits carry the author email configured in git;
-   check it is the one you want public.
+5. Record a demo call. The README has a bookings screenshot from the live calls; a call-timeline
+   screenshot from a real call would replace the seeded one.
+6. Look at the first CI run on GitHub, which has never run there, and fix whatever it finds. The
+   repository is public and its commits carry the author email configured in git.
 
 ## Open findings
 

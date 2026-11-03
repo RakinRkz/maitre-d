@@ -83,17 +83,28 @@ budget and what that changed.
 
 ### To verify against the live platform in M2
 
-- That a body property bound to `dynamic_variable: "system__conversation_id"` is filled by the
-  platform and never shown to the LLM.
-- That `{{system__env_backend_host}}` can stand for the whole host in a tool URL.
+- ~~That a body property bound to `dynamic_variable: "system__conversation_id"` is filled by the
+  platform and never shown to the LLM.~~ Checked 2026-11-03: the model's own parameters for
+  `create_booking` had no conversation ID, and every request we received had one, the same on all
+  three.
+- ~~That `{{system__env_backend_host}}` can stand for the whole host in a tool URL.~~ Checked
+  2026-11-03: the tool requests arrived at the tunnel hostname that `backend_host` held.
 - What the LLM sees when a tool times out or returns a non-2xx status, and whether the platform
-  retries tool calls. The docs are silent; we design for duplicates either way (section 6).
-- Whether `tool_latency_secs` and `conversation_turn_metrics` are present in real webhook
-  payloads, and in which nesting (the doc example and the SDK type disagree).
-- Whether the Free plan allows server tools, post-call webhooks and conversation tokens.
-- Whether a tool's `Authorization` header can reference a secret environment variable by label
-  (`{"env_var_label": "tool_bearer"}`), which the committed tool configs assume. The OpenAPI document
-  allows it; the docs the plan was written from describe `secret_id`. Fallback: `secret_id`.
+  retries tool calls. **Still open.** The first call got a 200 for every request. What it did show:
+  a tool the platform stops waiting for (the caller spoke) is recorded as an error with "Tool
+  execution was abandoned due to user input" although our server ran it, and the model then called
+  it again (decisions #29). No platform-side retry was seen. We design for duplicates either way
+  (section 6).
+- ~~Whether `tool_latency_secs` and `conversation_turn_metrics` are present in real webhook
+  payloads, and in which nesting.~~ Checked 2026-11-03: `tool_results[].tool_latency_secs`, and
+  `conversation_turn_metrics.metrics.<name>.elapsed_time` on a turn (decisions #28 lists the names).
+- Whether the Free plan allows server tools, post-call webhooks and conversation tokens. Server
+  tools and a post-call webhook: yes, as of 2026-11-03. A call started by the dashboard worked; the
+  platform labelled its authorization `signed_url`, not what was expected for a conversation token,
+  and this was not investigated.
+- ~~Whether a tool's `Authorization` header can reference a secret environment variable by label
+  (`{"env_var_label": "tool_bearer"}`).~~ Checked 2026-11-03: yes. The requests passed the bearer
+  check, so the platform sent the header with the secret's value.
 - ~~Whether the knowledge-base reuse check ever matches~~ Checked 2026-10-30: it does; the second
   run printed "reused" (decisions #26, update).
 - Whether more than the `production` environment can be created on the Free plan. Only

@@ -9,14 +9,15 @@ bookings, calls and a per-call timeline, and can start a web voice call.
 `docs/decisions.md` records why things are the way they are. Read both before changing anything
 structural.
 
-> **Status: built, tested and committed (not pushed); not yet exercised live.** Everything in
+> **Status: built, tested, committed and pushed; exercised by three live calls.** Everything in
 > the plan except the public deployment exists: the booking domain and server tools, the post-call
 > webhook, `/api/session`, the dashboard (read API and React frontend), the agent as code, the
-> knowledge base, CI, and agent evals. The platform side has only been partly set up: the agent,
-> its tools, the secret and the webhook do not exist on the ElevenLabs account yet, because the
-> steps that publish this machine (a tunnel) or write a secret to the workspace need the owner's
-> say-so (`docs/wip.md`). No real call has been made, so no end-to-end latency has been measured.
-> Update this file when that changes.
+> knowledge base, CI, and agent evals. The platform side is set up as of 2026-11-02: the secret, the
+> six tools, the five tests, the agent and the post-call webhook exist on the ElevenLabs account,
+> and `backend_host` points at a quick tunnel (the owner starts it; the environment refuses to let
+> the assistant, see `docs/wip.md`). Three real calls have been made (2026-11-03); the first booked a
+> table end to end. Tool latency is a few samples, and the agent tests have never been run. Update this file
+> when that changes.
 
 ## Layout
 

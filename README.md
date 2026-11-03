@@ -12,11 +12,14 @@ Maître D is the backend for that agent. It owns the booking rules, exposes them
 voice agent as server tools, and leaves the guarantee that no table is ever booked twice to
 Postgres, where a constraint can enforce it.
 
-> **Status: built and tested, not yet run live.** The backend, the dashboard, the agent's
-> configuration and the evals are all in this repository and covered by tests. The one thing that has
-> **not** happened is a real call: the agent has not been created on an ElevenLabs account by the
-> setup script yet, so no end-to-end latency has been measured and the voice path is untested. Every
-> number below is local and says what it was measured on. [Known gaps](#known-gaps) lists the rest.
+> **Status: built, tested, and exercised by real calls.** The backend, the dashboard, the agent's
+> configuration and the evals are all in this repository and covered by tests. On 2026-11-03
+> three voice calls were made from the dashboard's Talk button through a tunnel to a laptop. The
+> first booked a table end to end: the tools were reached with the right bearer, the booking is in
+> Postgres, and the post-call webhook arrived signed and was stored. The other two ended when the
+> caller closed the page, and the platform's analysis marked them unresolved. The agent tests have
+> still never been run. Every number below says what it was measured on, and the live ones come
+> from a handful of tool requests, so they are samples, not percentiles. [Known gaps](#known-gaps) lists the rest.
 > There is no hosted demo, on purpose (see [Run it with a voice agent](#run-it-with-a-voice-agent)).
 
 Built with Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2 (async), Alembic and PostgreSQL 17 on the
@@ -90,6 +93,12 @@ key has a `UNIQUE` constraint. A duplicate that arrives while the first request 
 loses on that constraint, reads the winner's row, and returns the same booking with the same
 reference.
 
+This happened for real in the first live call. The caller said "yes" while `create_booking` was
+running, and the platform recorded the tool call as "abandoned due to user input" with no result,
+although our server had already received it. The agent then called the tool twice more. The log
+holds three identical requests, each answered `ok` with the same reference, and the database holds
+one booking under one idempotency key.
+
 The key leaves out `notes`, because a retrying model may reword them. It also can't be the only
 check: if a caller corrects "eight" to "half seven" in the same call, the model might see that as a
 new booking. A separate same-day rule answers `already_booked_this_call` with the current booking,
@@ -132,10 +141,25 @@ one uvicorn worker, 200 sequential booking lifecycles after 10 warm-up rounds (2
 | `change_booking` | 5.7 / 7.4 | 9.5 / 12.2 |
 | `cancel_booking` | 4.2 / 5.6 | 8.0 / 10.5 |
 
-These are local numbers, not the round trip ElevenLabs sees through a tunnel; **that has not been
-measured**, because no live call has been made. The call timeline in the dashboard is built to show
-both for each tool call: the platform's `tool_latency_secs` and the server's own measurement, so
-network and platform overhead are visible separately.
+Those are local numbers, not the round trip ElevenLabs sees. The first live call gives one sample of
+that. Conditions: 2026-11-03, one 134 s call started from the dashboard's Talk button, the agent on
+`gemini-2.5-flash`, this laptop reached through a Cloudflare quick tunnel, the ElevenLabs Free
+plan. Three tool requests completed (the platform's `tool_latency_secs` is the time
+the platform waited; the server figure is our own middleware's, for the same request):
+
+| Tool request | Platform `tool_latency_secs` | Our server time |
+|---|---:|---:|
+| `check_availability` | 0.63 s | 3.8 ms |
+| `create_booking` (first completed reply) | 0.45 s | 4.7 ms |
+| `create_booking` (second completed reply) | 0.52 s | 4.1 ms |
+
+So about half a second of what the platform waited for was the network and the platform itself, not
+our handler. The platform also reported the model taking 0.79 to 1.12 s to write a tool request
+(`convai_llm_tool_request_generation_latency`, six samples) and 0.36 to 1.34 s to start answering
+(`convai_llm_service_ttfb`, sixteen samples), which is larger than anything on our side. Three tool
+calls are not a distribution: there are no percentiles for the live path, and repeating the call on
+another network would give different numbers. The call timeline in the dashboard shows both
+measurements for each tool call.
 
 ### Only the right caller sees a booking
 
@@ -182,8 +206,13 @@ platform's round trip and our server's time. The merge is a pure, unit-tested fu
 columns say so rather than show a made-up number.* The frontend's types are generated from the
 backend's OpenAPI document, and CI fails if the committed copy has drifted.
 
-The "Talk" button is typechecked and linted but has never run a call: that needs a live agent and
-spends voice minutes.
+![Today's bookings on the dashboard after the live calls](docs/images/dashboard-bookings-after-live-call.png)
+
+*The dashboard on 2026-11-03, after the live calls. The 12:00 booking for two on T1 at the top was
+made by voice through the Talk button; every other row is seeded demo data.*
+
+The "Talk" button is typechecked and linted, and it has started three real calls (2026-11-03). No
+automated test covers it, because a call needs a live agent and spends voice minutes.
 
 ## The agent and its evals
 
@@ -385,16 +414,20 @@ docs/                plan.md and decisions.md
 
 Said plainly, because a README that only lists strengths is not worth much:
 
-- **No live call has been made.** So there is no measured end-to-end latency, the "Talk" button has
-  never run, and the shape of a real post-call payload (for example the names of the per-turn
-  metrics, and their unit) is assumed from the documentation and the API schema.
-- **The platform setup is untested against a full account.** The script has been run far enough to
-  create the knowledge-base documents, which also showed that its re-run check works, and to learn
-  that the platform accepts an environment-variable label in a tool header. Creating the tools, the
-  agent and the webhook has not completed.
+- **A few real calls, not a load test.** The live latency above is three tool requests from the
+  first call, on one network. Nothing here says how the system behaves with many calls, a different
+  network, or a longer conversation. The 180 s call cap and the 30 s silence timeout were not
+  reached (the longest call lasted 149 s), so whether the platform enforces them is
+  still unknown, and so is what the model sees when a tool returns a non-2xx status.
+- **A caller who speaks during a booking abandons the tool call, and the agent calls it again.**
+  It happened in two of the three calls (`create_booking` once, `check_availability` once). The
+  idempotency key absorbs it for bookings (one booking, see above), so the data stays right, but
+  the agent made three calls where one was needed. How that sounded to the caller was not assessed, and the
+  agent configuration has not been changed in response. See `docs/decisions.md` #29.
 - **The agent tests have never been run**, so the cost of a run is unknown. The prompt's behaviour
   on allergens, injection and other callers' bookings is asserted by tests that exist but haven't
-  executed.
+  executed. For scale: the three live calls cost 1,619, 982 and 1,862 credits, 4,463 of the Free plan's 10,000
+  a month.
 - **CI is unproven on GitHub.** The workflow's commands pass locally.
 - **No login on the dashboard.** It is local-only by construction (it refuses proxied requests); a
   deployment would need a password and rate limiting, and there isn't one.

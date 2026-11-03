@@ -573,6 +573,42 @@ platform's round trip and our server's time; the gap is network and platform ove
 nothing else in the system can see. Seeded demo calls carry no timings at all, so a screenshot can't
 show a latency that was not measured.
 
-**Not exercised.** The "Talk" button is typechecked and linted only: it needs a live call, which
-spends voice minutes. The metric names in a turn's `conversation_turn_metrics`, and whether
-`elapsed_time` is in seconds, are unverified until a real payload arrives.
+**Update, 2026-11-03.** The first live call exercised the Talk button (the platform recorded the
+call as started by the React SDK) and delivered a real payload. The metrics in a turn's
+`conversation_turn_metrics.metrics` are keyed by name, each with an `elapsed_time`; the names seen
+were `convai_tts_service_ttfb`, `convai_ttf_audio_since_silence`,
+`convai_turn_silence_before_initiation`, `convai_asr_trailing_service_latency`,
+`convai_turn_asr_excess`, `convai_turn_asr_latency`, `convai_llm_service_ttfb`,
+`convai_llm_service_ttf_sentence`, `convai_llm_service_tt_last_sentence` and
+`convai_llm_tool_request_generation_latency`. The unit is not documented; the values (a text-to-speech
+first byte of 0.06 to 0.12) and `tool_latency_secs` beside them are consistent with seconds, and
+that is how they are shown. The timeline's handling held up against the real shape. The Talk button
+has no automated test: a call spends voice minutes.
+
+## 29. A caller who speaks during a booking abandons the tool call; the idempotency key absorbs the re-call
+
+**What happened.** In the first live call (2026-11-03), the caller said "yes" while `create_booking`
+was running. The platform recorded that tool call as an error with the text "Tool execution was
+abandoned due to user input" and zero latency, although our server had received the request and
+answered it. The agent then called `create_booking` again, and a third time after another "yes".
+Our log has three requests with the same body, each answered `ok` with the same reference; the
+database has one booking under one idempotency key. It happened again in the third call of the
+day, to `check_availability` (the platform recorded the first as abandoned, our server had
+answered it, and the agent asked again), which is harmless because that tool only reads.
+
+**Decision.** Nothing in the code changes. This is the case decisions #2 was written for, and it is
+now seen for real rather than argued: the platform, not only the model, can cause a second call,
+because a tool it has stopped waiting for has still run. The per-conversation idempotency key
+(conversation ID plus the booking's identity) is what made three calls into one booking, so it
+stays and the "retries are a fact of life" assumption in the plan is confirmed.
+
+**Not decided, and not tried.** Whether to stop it happening. The tool configs already set
+`pre_tool_speech: auto` and `execution_mode: immediate`; the platform's tool settings may offer
+ways to keep a caller's speech from abandoning a write, or the prompt may be able to tell the
+agent to say one short sentence before booking and never to call `create_booking` twice. Neither
+has been tested, and the agent tests (never run) do not cover it. Changing the agent is free, but
+judging whether it improved anything takes a call, which spends voice minutes.
+
+**What was not observed.** Whether the platform retries a request on its own (these re-calls were
+separate tool calls by the model, so no platform retry was seen), and what the model sees on a
+non-2xx status (every request in the call got a 200).
