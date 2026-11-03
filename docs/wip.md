@@ -21,7 +21,7 @@ to this machine. The agent tests have never been run.
 | Dashboard frontend (React) | built, tested; the Talk button started the one real call but has no automated test |
 | Agent as code, knowledge base, five agent tests | built, shape-tested, on the platform since 2026-11-02; the agent has taken one real call; the five tests have **never been run** |
 | `setup_elevenlabs.py`, `create_webhook.py`, `run_agent_tests.py` | built, tested against a stateful fake; `setup`, `set_backend_host` and `create_webhook` run for real on 2026-11-02 (`run_agent_tests` has not been) |
-| CI (`.github/workflows/ci.yml`) | written; its commands pass locally; **has not run on GitHub** |
+| CI (`.github/workflows/ci.yml`) | written; passed its first GitHub run on 2026-11-03 (backend and frontend jobs, 383 and 68 tests) |
 | README, LICENSE | written |
 
 All of it is committed on `main`, in small commits, one concern each, and pushed to `origin`
@@ -155,8 +155,8 @@ stored call, the `tool_invocations` rows and the bookings table.
    other four to run. Put the measured cost in the README.
 5. Record a demo call. The README has a bookings screenshot from the live calls; a call-timeline
    screenshot from a real call would replace the seeded one.
-6. Look at the first CI run on GitHub, which has never run there, and fix whatever it finds. The
-   repository is public and its commits carry the author email configured in git.
+6. CI is green on its first GitHub run, and the repository is public. Its commits carry the author
+   email configured in git; check that is the one you want visible.
 
 ## Open findings
 
@@ -174,8 +174,10 @@ stored call, the `tool_invocations` rows and the bookings table.
   security loss); `FIELD_HINTS` mislabel length errors; `sync_dining_tables` upserts but never
   removes a table; `/api/health` doesn't touch the database; a 500 raised before a response is sent
   is recorded with 0 ms (the latency query ignores non-200 rows for this reason).
-- **The workflow wasn't machine-linted.** `actionlint` was blocked by the environment; the YAML
-  parses and every command in it was run locally.
+- **The workflow wasn't machine-linted.** `actionlint` was blocked by the environment. It parses and
+  ran green on GitHub once; GitHub annotated that `actions/checkout@v4`, `setup-uv@v5` and
+  `setup-node@v4` target Node.js 20, which is deprecated, and that `ubuntu-latest` will move to
+  Ubuntu 26. Neither failed the run.
 
 ## Choices made that the owner may want to change
 

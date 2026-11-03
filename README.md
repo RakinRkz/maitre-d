@@ -428,7 +428,8 @@ Said plainly, because a README that only lists strengths is not worth much:
   on allergens, injection and other callers' bookings is asserted by tests that exist but haven't
   executed. For scale: the three live calls cost 1,619, 982 and 1,862 credits, 4,463 of the Free plan's 10,000
   a month.
-- **CI is unproven on GitHub.** The workflow's commands pass locally.
+- **CI has run once on GitHub, and passed** (2026-11-03: both jobs green, 383 backend and 68
+  frontend tests). One run is not a track record, and the workflow still has not been machine-linted.
 - **No login on the dashboard.** It is local-only by construction (it refuses proxied requests); a
   deployment would need a password and rate limiting, and there isn't one.
 - **A quick tunnel's address changes** on each start, and a webhook's URL can't be edited, so the
